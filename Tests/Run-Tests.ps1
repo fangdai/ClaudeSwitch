@@ -120,6 +120,51 @@ function New-Session($t, $acct, $org, [string]$id, [double]$act, [string]$title,
 }
 function SessDir($t, $acct, $org) { return (Join-Path $t.Data ("claude-code-sessions\{0}\{1}" -f $acct.Uuid, $org)) }
 
+# ================================================================ V2-only login regression
+if (Want 'v2login') {
+    Section 'V2-only: nhận đăng nhập, lưu và chuyển account'
+    $t = New-Env 'v2login'
+    Save-Acct $t $A
+    $null = Run-Engine $t @('-Action', 'PrepareAdd')
+    Set-Current $t $B
+    $v2Text = [regex]::Replace((Build-Config $B), '(?m)^  "oauth:tokenCache":.*\r?\n', '')
+    [IO.File]::WriteAllText($t.Config, $v2Text, $Utf8)
+    $cfgHash = FileHash $t.Config
+    $st = Get-Status $t
+    Assert ($st.loggedIn -and $st.activeUuid -eq $B.Uuid -and $st.unsavedCurrent) 'Status nhận account B chỉ có token V2'
+
+    # Execute the actual GUI detector without opening a window.
+    $tokens = $null; $parseErrors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($Gui, [ref]$tokens, [ref]$parseErrors)
+    Assert (@($parseErrors).Count -eq 0) 'GUI sửa đổi không có lỗi cú pháp'
+    $detector = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Read-LoginUuid' }, $true)
+    . ([scriptblock]::Create($detector.Extent.Text))
+    $ConfigPath = $t.Config; $Utf8NoBom = $Utf8
+    Assert ((Read-LoginUuid) -eq $B.Uuid) 'Bộ nhận đăng nhập GUI nhận V2-only'
+    [IO.File]::WriteAllText($t.Config, $v2Text.Substring(0, $v2Text.Length - 1), $Utf8)
+    Assert ($null -eq (Read-LoginUuid)) 'GUI đợi khi Claude chưa ghi xong JSON'
+    [IO.File]::WriteAllText($t.Config, $v2Text.Replace($B.Tc2, ''), $Utf8)
+    Assert ($null -eq (Read-LoginUuid)) 'GUI từ chối V2 rỗng'
+    $r = Run-Engine $t @('-Action', 'Save')
+    Assert ($r.Code -eq 3) 'Engine từ chối lưu V2 rỗng'
+    [IO.File]::WriteAllText($t.Config, $v2Text, $Utf8)
+    $r = Run-Engine $t @('-Action', 'Save')
+    $st = Get-Status $t
+    Assert ($r.Code -eq 0 -and $st.profiles.Count -eq 2 -and -not $st.pendingAdd) 'Lưu profile B V2-only và hoàn tất pending-add'
+    Assert ((FileHash $t.Config) -eq $cfgHash) 'Nhận/lưu account không sửa config đang dùng'
+    $r = Switch-To $t $A
+    Assert ($r.Code -eq 0 -and (CfgHas $t.Config $A)) 'Chuyển từ V2-only sang profile cũ có hai token'
+    $r = Switch-To $t $B
+    $d = Get-Content $t.Config -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert ($r.Code -eq 0 -and $d.lastKnownAccountUuid -eq $B.Uuid -and $d.'oauth:tokenCacheV2' -eq $B.Tc2 -and -not $d.PSObject.Properties['oauth:tokenCache']) 'Chuyển về B: khôi phục V2, gỡ token cũ của A'
+    Assert ((FileHash $t.Cookies) -eq (Hex (New-CookieBytes $B))) 'Cookie B khôi phục đúng'
+    $other = OtherJson $t.Config
+    $r = Run-Engine $t @('-Action', 'PrepareAdd')
+    Assert ($r.Code -eq 0 -and (OtherJson $t.Config) -eq $other) 'PrepareAdd hỗ trợ account chỉ có V2, giữ cấu hình khác'
+    $r = Switch-To $t $B
+    Assert ($r.Code -eq 0 -and (Get-Status $t).activeUuid -eq $B.Uuid) 'Hủy thêm account khôi phục được profile V2-only'
+}
+
 # ================================================================ 1. vong tron save/switch
 if (Want 'roundtrip') {
     Section '1. Save / Switch vòng tròn, byte còn lại giữ nguyên'
@@ -435,7 +480,11 @@ if (Want 'real') {
         foreach ($k in 'oauth:tokenCache', 'oauth:tokenCacheV2', 'lastKnownAccountUuid') {
             $e = $c.keys.$k
             Write-Host ("    {0}: occurrences={1}, regexMatches={2}, nonEmptyString={3}, length={4}" -f $k, $e.occurrences, $e.regexMatches, $e.isNonEmptyString, $e.valueLength)
-            Assert ($e.occurrences -eq 1 -and $e.regexMatches -eq 1 -and $e.isNonEmptyString) "khóa $k xuất hiện đúng 1 lần và regex khớp"
+            if ($k -eq 'oauth:tokenCache' -and $e.occurrences -eq 0) {
+                Assert ($c.keys.'oauth:tokenCacheV2'.isNonEmptyString) 'Claude dùng V2-only: khóa token cũ không bắt buộc'
+            } else {
+                Assert ($e.occurrences -eq 1 -and $e.regexMatches -eq 1 -and $e.isNonEmptyString) "khóa $k xuất hiện đúng 1 lần và regex khớp"
+            }
         }
         Assert (-not (Test-Path (Join-Path $Scratch 'real-store-unused'))) 'không tạo gì trong StoreDir khi kiểm tra'
     }
@@ -528,10 +577,11 @@ if ((Want 'gui') -and -not $SkipGui) {
     $end = (Get-Date).AddSeconds(20); $cleared = $false
     while ((Get-Date) -lt $end -and -not $cleared) { Start-Sleep -Milliseconds 500; $cleared = -not ([IO.File]::ReadAllText($t.Config).Contains('oauth:tokenCache')) }
     Assert $cleared 'Bấm nút "Thêm account thứ hai" rồi xác nhận: đã mở màn hình đăng nhập (gỡ khóa)'
-    [IO.File]::WriteAllText($t.Config, (Build-Config $B), $Utf8)
+    $v2Login = [regex]::Replace((Build-Config $B), '(?m)^  "oauth:tokenCache":.*\r?\n', '')
+    [IO.File]::WriteAllText($t.Config, $v2Login, $Utf8)
     $bin = Join-Path $t.Store "profiles\$($B.Uuid)\auth.bin"
     $end = (Get-Date).AddSeconds(25); while ((Get-Date) -lt $end -and -not (Test-Path $bin)) { Start-Sleep -Milliseconds 500 }
-    Assert (Test-Path $bin) 'GUI tự nhận account mới sau khi đăng nhập và lưu profile'
+    Assert (Test-Path $bin) 'GUI tự nhận account mới chỉ có token V2 và lưu profile'
     $done = $p.WaitForExit(60000); if (-not $done) { try { $p.Kill() } catch {} }
     Assert ((Get-GuiErrors $t).Count -eq 0) 'Luồng thêm account: log giao diện không có lỗi'
 

@@ -745,18 +745,20 @@ function Read-LoginUuid {
         if (-not $ConfigPath -or -not (Test-Path -LiteralPath $ConfigPath)) { return $null }
         $fs = New-Object IO.FileStream($ConfigPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
         try { $sr = New-Object IO.StreamReader($fs, $Utf8NoBom); $t = $sr.ReadToEnd() } finally { $fs.Dispose() }
-        $m = [regex]::Match($t, '"lastKnownAccountUuid"\s*:\s*"([0-9a-fA-F\-]{36})"')
-        if (-not $m.Success) { return $null }
-        if (-not [regex]::IsMatch($t, '"oauth:tokenCache"\s*:\s*"[^"]+"')) { return $null }
-        if (-not [regex]::IsMatch($t, '"oauth:tokenCacheV2"\s*:\s*"[^"]+"')) { return $null }
-        return $m.Groups[1].Value
+        $d = $t | ConvertFrom-Json -ErrorAction Stop
+        $u = $d.lastKnownAccountUuid
+        if ($u -isnot [string] -or $u -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') { return $null }
+        if ($d.'oauth:tokenCacheV2' -isnot [string] -or -not $d.'oauth:tokenCacheV2') { return $null }
+        $legacy = $d.PSObject.Properties['oauth:tokenCache']
+        if ($legacy -and ($legacy.Value -isnot [string] -or -not $legacy.Value)) { return $null }
+        return $u
     } catch { return $null }
 }
 function Check-NewLogin {
     if ($AppState.Mode -ne 'progress' -or $AppState.Flow -ne 'add' -or $AppState.NewUuid) { return }
     $u = Read-LoginUuid
     if (-not $u) { return }
-    foreach ($p in @($AppState.Status.profiles)) { if ($p.uuid -ieq $u) { if ($AppState.PrevUuid -and $u -ieq $AppState.PrevUuid) { $ProgMsg.Text = 'Đây vẫn là account cũ. Hãy đăng nhập account còn lại (khác account này).' }; return } }
+    if ($AppState.PrevUuid -and $u -ieq $AppState.PrevUuid) { $ProgMsg.Text = 'Đây vẫn là account cũ. Hãy đăng nhập account còn lại (khác account này).'; return }
     $AppState.NewUuid = $u
     $AppState.AddTimer.Stop()
     $ProgMsg.Text = 'Đã thấy account mới, đang lưu lại…'

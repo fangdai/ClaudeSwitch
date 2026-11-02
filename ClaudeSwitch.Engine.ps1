@@ -233,7 +233,8 @@ function Get-AuthFromDict($d) {
     $u = Get-DictString $d $script:KeyUuid
     $t1 = Get-DictString $d $script:KeyTc
     $t2 = Get-DictString $d $script:KeyTc2
-    if ($u -and $t1 -and $t2 -and ($u -match $script:GuidRx)) {
+    # Current Claude versions only write V2. A present legacy key must still be valid.
+    if ($u -and $t2 -and ($u -match $script:GuidRx) -and ((-not (Test-DictHas $d $script:KeyTc)) -or $t1)) {
         return @{ Uuid = $u; Tc = $t1; Tc2 = $t2 }
     }
     return $null
@@ -257,9 +258,9 @@ function Assert-NewConfig($origState, [string]$newText, $expected, [bool]$expect
         if ((Get-DictString $nd $script:KeyUuid) -ne $expected.Uuid -or (Get-DictString $nd $script:KeyTc) -ne $expected.Tc -or (Get-DictString $nd $script:KeyTc2) -ne $expected.Tc2) {
             throw 'Kiểm tra sau khi ghi: thông tin đăng nhập mới không khớp.'
         }
-        $allThere = $true
-        foreach ($k in $script:KeyNames) { if ((Get-KeyCount $origState.Info.Text $k) -ne 1) { $allThere = $false } }
-        if ($allThere -and ((Get-MaskedText $newText) -ne (Get-MaskedText $origState.Info.Text))) { throw 'Kiểm tra sau khi ghi: byte ngoài 3 giá trị đăng nhập không còn giống bản gốc.' }
+        $sameKeys = $true
+        foreach ($k in $script:KeyNames) { if ((Get-KeyCount $origState.Info.Text $k) -ne (Get-KeyCount $newText $k)) { $sameKeys = $false } }
+        if ($sameKeys -and ((Get-MaskedText $newText) -ne (Get-MaskedText $origState.Info.Text))) { throw 'Kiểm tra sau khi ghi: byte ngoài 3 giá trị đăng nhập không còn giống bản gốc.' }
     } else {
         foreach ($k in $script:KeyNames) { if (Test-DictHas $nd $k) { throw 'Kiểm tra sau khi ghi: khóa đăng nhập vẫn còn.' } }
     }
@@ -305,7 +306,7 @@ function Read-AuthBin([string]$uuid) {
     } catch { throw 'File đăng nhập đã lưu bị hỏng hoặc không giải mã được. Chưa có gì bị thay đổi. Hãy đăng nhập lại account này rồi lưu lại.' }
     $a = $null
     $u1 = Get-DictString $d 'lastKnownAccountUuid'; $t1 = Get-DictString $d 'tokenCache'; $t2 = Get-DictString $d 'tokenCacheV2'
-    if ($u1 -and $t1 -and $t2 -and ($u1 -match $script:GuidRx)) { $a = @{ Uuid = $u1; Tc = $t1; Tc2 = $t2 } }
+    if ($u1 -and $t2 -and ($u1 -match $script:GuidRx) -and (($null -eq $d['tokenCache']) -or $t1)) { $a = @{ Uuid = $u1; Tc = $t1; Tc2 = $t2 } }
     if (-not $a -or ($a.Uuid -ine $uuid)) { throw 'File đăng nhập đã lưu không hợp lệ. Chưa có gì bị thay đổi.' }
     $ck = $null
     $cs = Get-DictString $d 'cookies'
@@ -667,7 +668,8 @@ function Invoke-Switch([string]$target) {
         $st = Get-ConfigState
         Test-ConfigEditable $st.Info.Text
         $new = $st.Info.Text
-        $new = Set-KeyText $new $script:KeyTc  $tgt.Auth.Tc
+        if ($tgt.Auth.Tc) { $new = Set-KeyText $new $script:KeyTc $tgt.Auth.Tc }
+        else { $new = Remove-KeyText $new $script:KeyTc }
         $new = Set-KeyText $new $script:KeyTc2 $tgt.Auth.Tc2
         $new = Set-KeyText $new $script:KeyUuid $tgt.Auth.Uuid
         Assert-NewConfig $st $new $tgt.Auth $true
@@ -703,7 +705,7 @@ function Invoke-PrepareAdd {
     $st = Get-ConfigState
     if (-not $st.Auth) { throw 'Claude chưa đăng nhập account nào để lưu lại. Hãy đăng nhập account đầu tiên trước.' }
     Test-ConfigEditable $st.Info.Text
-    foreach ($k in $script:KeyNames) { if ((Get-KeyCount $st.Info.Text $k) -ne 1) { throw "config.json thiếu khóa '$k' nên chưa thể thêm account." } }
+    foreach ($k in @($script:KeyTc2, $script:KeyUuid)) { if ((Get-KeyCount $st.Info.Text $k) -ne 1) { throw "config.json thiếu khóa '$k' nên chưa thể thêm account." } }
     $prev = $st.Auth.Uuid
 
     Write-Step 'close' 'running' 'Đang đóng Claude…'
