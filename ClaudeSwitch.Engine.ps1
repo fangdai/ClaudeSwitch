@@ -327,10 +327,13 @@ function Get-OrgFolders([string]$acct) {
 }
 function Get-NewestOrg([string]$acct) {
     $best = $null; $bestT = [datetime]::MinValue
-    foreach ($d in (Get-OrgFolders $acct)) {
+    $folders = @(Get-OrgFolders $acct | Where-Object { $_.Name -match $script:GuidRx })
+    foreach ($d in $folders) {
         $f = Get-ChildItem -LiteralPath $d.FullName -Filter 'local_*.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
         if ($f -and $f.LastWriteTimeUtc -gt $bestT) { $bestT = $f.LastWriteTimeUtc; $best = $d.Name }
     }
+    # A newly signed-in account can have only scheduled-tasks.json, with no sessions yet.
+    if (-not $best -and $folders.Count -eq 1) { return $folders[0].Name }
     return $best
 }
 function Get-SessionCount([string]$acct, [string]$org) {
@@ -519,13 +522,22 @@ function Invoke-SyncSessions {
     $profiles = @(Get-Profiles)
     $res = @{ copied = 0; updated = 0; skipped = 0 }
     if ($profiles.Count -lt 2) { Write-Log 'Chưa đủ 2 profile để đồng bộ session.'; return $res }
+    $orgDirs = @{}
+    foreach ($profile in $profiles) {
+        $dir = Get-SyncOrgDir $profile
+        if (-not $dir) {
+            $name = Get-DictString $profile.Meta 'label'
+            if (-not $name) { $name = $profile.Uuid.Substring(0, 4) }
+            throw ("Chưa xác định được thư mục session của account {0}. Hãy mở Claude bằng account này một lần rồi đồng bộ lại." -f $name)
+        }
+        $orgDirs[$profile.Uuid] = $dir
+    }
     $man = Read-Manifest
     $bkRoot = Join-Path (Join-Path $StoreDir 'session-backups') (Get-Date -Format 'yyyyMMdd-HHmmss-fff')
     for ($i = 0; $i -lt $profiles.Count; $i++) {
         for ($j = $i + 1; $j -lt $profiles.Count; $j++) {
             $P = $profiles[$i]; $Q = $profiles[$j]
-            $dp = Get-SyncOrgDir $P; $dq = Get-SyncOrgDir $Q
-            if (-not $dp -or -not $dq) { continue }
+            $dp = $orgDirs[$P.Uuid]; $dq = $orgDirs[$Q.Uuid]
             $pair = (@($P.Uuid, $Q.Uuid) | Sort-Object) -join '|'
             $fp = @{}; $fq = @{}
             if (Test-Path -LiteralPath $dp) { foreach ($f in (Get-ChildItem -LiteralPath $dp -Filter 'local_*.json' -File)) { $fp[$f.Name] = $f } }

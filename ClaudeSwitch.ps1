@@ -219,6 +219,7 @@ $MainXaml = @'
         <CheckBox x:Name="SyncChk" Style="{StaticResource SwitchBox}" Content="Hiện session ở cả 2 account" IsChecked="True"/>
         <Button x:Name="MoreBtn" Grid.Column="1" Style="{StaticResource IconBtn}" Content="&#xE712;" ToolTip="Thêm tùy chọn"/>
       </Grid>
+      <Button x:Name="SyncNowBtn" Style="{StaticResource Ghost}" Content="Đồng bộ session ngay" Margin="2,10,0,0" HorizontalAlignment="Stretch" IsEnabled="False" ToolTip="Cập nhật session mới nhất giữa hai account"/>
     </StackPanel>
     <Popup x:Name="MorePopup" PlacementTarget="{Binding ElementName=MoreBtn}" Placement="Top" HorizontalOffset="-196" VerticalOffset="-4" StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
       <Border Width="230" Margin="6" Background="{DynamicResource Card}" BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" CornerRadius="10" Padding="4">
@@ -255,6 +256,7 @@ $Cards = $win.FindName('Cards'); $PanelProgress = $win.FindName('PanelProgress')
 $StepsPanel = $win.FindName('StepsPanel'); $BarFill = $win.FindName('BarFill'); $ProgMsg = $win.FindName('ProgMsg')
 $BtnPrimary = $win.FindName('BtnPrimary'); $BtnSecondary = $win.FindName('BtnSecondary'); $Toast = $win.FindName('Toast')
 $SyncChk = $win.FindName('SyncChk'); $MoreBtn = $win.FindName('MoreBtn'); $MorePopup = $win.FindName('MorePopup')
+$SyncNowBtn = $win.FindName('SyncNowBtn')
 $Overlay = $win.FindName('Overlay'); $ConfirmTitle = $win.FindName('ConfirmTitle'); $ConfirmBody = $win.FindName('ConfirmBody')
 $ConfirmExtra = $win.FindName('ConfirmExtra'); $SkipChk = $win.FindName('SkipChk'); $ConfirmOk = $win.FindName('ConfirmOk'); $ConfirmCancel = $win.FindName('ConfirmCancel')
 $Root = $win.FindName('Root')
@@ -521,6 +523,7 @@ function Render-Accounts {
     if ($st -and $st.configError) {
         $Toast.Text = [string]$st.configError; $Toast.Visibility = 'Visible'
     }
+    Update-SyncButton
 }
 
 # ---------------------------------------------------------------- đổi tên
@@ -550,6 +553,7 @@ $BarWidth = 382
 
 function Show-ProgressPanel([string]$title, $steps) {
     $AppState.Mode = 'progress'
+    Update-SyncButton
     $Cards.Children.Clear(); $Toast.Visibility = 'Collapsed'
     $PanelProgress.Visibility = 'Visible'
     $ProgTitle.Text = $title; $ProgTitle.Foreground = (Res 'Text'); $ProgMsg.Text = ''
@@ -616,6 +620,46 @@ function Show-Accounts {
 function Show-Toast([string]$msg) {
     $Toast.Text = $msg; $Toast.Visibility = 'Visible'
     if ($AppState.ToastTimer) { $AppState.ToastTimer.Stop(); $AppState.ToastTimer.Start() }
+}
+
+function Update-SyncButton {
+    $profiles = @($AppState.Status.profiles | Where-Object { $_.hasAuth })
+    $SyncNowBtn.IsEnabled = ($AppState.Mode -eq 'accounts' -and -not $AppState.Busy -and $profiles.Count -ge 2)
+}
+
+function Start-SessionSync {
+    if ($AppState.Busy -or $AppState.Mode -ne 'accounts') { return }
+    if (@($AppState.Status.profiles | Where-Object { $_.hasAuth }).Count -lt 2) {
+        Show-Toast 'Hãy thêm đủ 2 account trước khi đồng bộ session.'
+        return
+    }
+    $AppState.Busy = $true
+    Update-SyncButton
+    $SyncNowBtn.Content = 'Đang đồng bộ…'
+    $SyncChk.IsEnabled = $false
+    Show-Toast 'Đang đồng bộ session giữa 2 account…'
+    try {
+        [void](Start-EngineJob @('-Action', 'SyncSessions') $null { param($job) Finish-SessionSync $job })
+    } catch {
+        Finish-SessionSync @{ Exit = 1; Out = ''; Lines = @() }
+    }
+}
+
+function Finish-SessionSync($job) {
+    try {
+        if ($job.Exit -ne 0) { throw (Get-FailMessage $job) }
+        $result = [IO.File]::ReadAllText($job.Out, [Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop
+        if (-not $result.ok) { throw 'Chưa nhận được kết quả đồng bộ.' }
+        Show-Toast ('Đã đồng bộ: thêm {0}, cập nhật {1} session. Mở lại Claude để thấy đủ.' -f $result.copied, $result.updated)
+    } catch {
+        Show-Toast ('Chưa đồng bộ được session. ' + $_.Exception.Message)
+    } finally {
+        $AppState.Busy = $false
+        $SyncNowBtn.Content = 'Đồng bộ session ngay'
+        $SyncChk.IsEnabled = $true
+        Update-SyncButton
+        Refresh-Status
+    }
 }
 
 # ---------------------------------------------------------------- xác nhận
@@ -947,13 +991,13 @@ $win.FindName('MenuLog').Add_Click({
     if ($f) { Start-Process -FilePath 'notepad.exe' -ArgumentList ('"' + $f.FullName + '"') } else { Show-Toast 'Chưa có log nào.' }
 })
 $MenuConfirm.Add_Click({ $MorePopup.IsOpen = $false; Set-GuiSetting 'skipConfirm' $false; $MenuConfirm.Visibility = 'Collapsed'; Show-Toast 'Đã bật lại hộp xác nhận.' })
+$SyncNowBtn.Add_Click({ Start-SessionSync })
 $SyncChk.Add_Click({
     if ($AppState.Loading) { return }
     $on = [bool]$SyncChk.IsChecked
     Set-GuiSetting 'syncSessions' $on
     if ($on) {
-        Show-Toast 'Đang đồng bộ session giữa 2 account…'
-        [void](Start-EngineJob @('-Action', 'SyncSessions') $null { param($job) Show-Toast 'Đã đồng bộ session. Mở lại Claude để thấy đủ.'; Refresh-Status })
+        Start-SessionSync
     } else { Show-Toast 'Đã tắt. Các session đã sao chép trước đó vẫn còn; dùng "Gỡ session đã sao chép" nếu muốn bỏ.' }
 })
 

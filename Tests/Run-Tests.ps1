@@ -362,6 +362,47 @@ if (Want 'sync') {
     Assert ($r.Code -eq 0 -and (Test-Path (Join-Path (SessDir $t $A $A.Org) 'local_y1.json'))) 'Switch (mặc định bật) tự đồng bộ session sang account kia'
 }
 
+# ================================================================ Empty destination org regression
+if (Want 'sync-empty-org') {
+    Section 'Đồng bộ vào account mới chưa có session'
+    $t = New-Env 'sync-empty-org'
+    Save-Acct $t $A
+    $session = New-Session $t $A $A.Org 'existing' 1000 'Existing session'
+    Save-Acct $t $B
+    $metaPath = Join-Path $t.Store ("profiles\{0}\meta.json" -f $B.Uuid)
+    $meta = Get-Content $metaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $meta.orgUuid = $null
+    [IO.File]::WriteAllText($metaPath, ($meta | ConvertTo-Json -Compress), $Utf8)
+    $dest = SessDir $t $B $B.Org
+    New-Item -ItemType Directory -Force $dest | Out-Null
+    $scheduled = Join-Path $dest 'scheduled-tasks.json'
+    [IO.File]::WriteAllText($scheduled, '{"tasks":[]}', $Utf8)
+    $scheduledHash = FileHash $scheduled
+    $st = Get-Status $t
+    $pb = $st.profiles | Where-Object { $_.uuid -eq $B.Uuid }
+    Assert ($pb.orgUuid -eq $B.Org -and $pb.sessionCount -eq 0) 'Nhận org duy nhất dù account chưa có session'
+    $out = Join-Path $t.Root 'sync-result.json'
+    $r = Run-Engine $t @('-Action', 'SyncSessions', '-OutFile', $out)
+    $result = Get-Content $out -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert ($r.Code -eq 0 -and $result.copied -eq 1) 'Đồng bộ thực sự sao chép vào account mới, không báo thêm 0 sai'
+    Assert ((FileHash (Join-Path $dest 'local_existing.json')) -eq (FileHash $session)) 'Session đích giống nguyên bản từng byte'
+    Assert ((FileHash $scheduled) -eq $scheduledHash) 'Giữ nguyên lịch tác vụ của account đích'
+
+    # Missing metadata with multiple empty org folders must fail clearly.
+    $t = New-Env 'sync-ambiguous-org'
+    Init-Two $t
+    $session = New-Session $t $A $A.Org 'existing' 1000 'Existing session'
+    $metaPath = Join-Path $t.Store ("profiles\{0}\meta.json" -f $B.Uuid)
+    $meta = Get-Content $metaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $meta.orgUuid = $null
+    [IO.File]::WriteAllText($metaPath, ($meta | ConvertTo-Json -Compress), $Utf8)
+    New-Item -ItemType Directory -Force (SessDir $t $B $B.Org), (SessDir $t $B $A.Org) | Out-Null
+    $before = FileHash $session
+    $r = Run-Engine $t @('-Action', 'SyncSessions')
+    Assert ($r.Code -ne 0 -and (Last-Msg $r) -match 'Chưa xác định') 'Org không rõ: báo lỗi thay vì báo đồng bộ thành công'
+    Assert ((FileHash $session) -eq $before -and -not (Test-Path (Join-Path $t.Store 'synced.json'))) 'Kiểm tra org trước khi sao chép hoặc ghi manifest'
+}
+
 # ================================================================ 6. PrepareAdd
 if (Want 'prepareadd') {
     Section '6. PrepareAdd và bắt account mới'
