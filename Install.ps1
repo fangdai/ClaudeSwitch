@@ -16,7 +16,7 @@ $src = $PSScriptRoot
 try {
     Write-Host 'Đang cài đặt Claude Switch…' -ForegroundColor Cyan
     New-Item -ItemType Directory -Force $InstallDir | Out-Null
-    $files = 'ClaudeSwitch.ps1', 'ClaudeSwitch.Engine.ps1', 'ClaudeSwitch.bat', 'Uninstall.ps1', 'README.md', 'Go cai dat.bat'
+    $files = 'ClaudeSwitch.ps1', 'ClaudeSwitch.Engine.ps1', 'ClaudeSwitch.Cli.ps1', 'ClaudeSwitch.CliHost.ps1', 'ClaudeSwitch.CliUI.ps1', 'ClaudeSwitch.bat', 'Uninstall.ps1', 'README.md', 'Go cai dat.bat'
     foreach ($f in $files) {
         $p = Join-Path $src $f
         if (Test-Path -LiteralPath $p) {

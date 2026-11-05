@@ -8,6 +8,9 @@ param(
     [string]$DataDir,
     [string]$StoreDir,
     [string]$ClaudeJson,
+    [string]$CliPath,
+    [string]$CliConfigDir,
+    [string]$CliConfigFile,
     [switch]$NoAppControl,
     [string]$RenderPreview,        # vẽ cửa sổ ra PNG rồi thoát
     [string]$PreviewState = 'two', # two | one | switching | error | success | confirm | adding
@@ -38,7 +41,7 @@ $AppState = @{
     StepUi = @{}; StepOrder = @(); Primary = $null; ProgPrimary = $null; ProgSecondary = $null
     PrevUuid = $null; TargetUuid = $null; ConfirmKind = ''; ConfirmArg = ''; Exiting = $false
     StatusBusy = $false; SavedOnce = $false; Loading = $false; AddTimer = $null; NewUuid = $null; AutoDone = $false
-    Dark = $false
+    Dark = $false; ActiveTool = 'desktop'; CliSavedOnce = $false; CliFinishedId = $null
 }
 
 function Gui-Log([string]$m) {
@@ -194,10 +197,23 @@ $MainXaml = @'
         </Border>
         <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
           <TextBlock Text="Claude Switch" FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource Text}"/>
-          <TextBlock Text="Chuyển giữa 2 account Claude chỉ với một cú nhấp" FontSize="12" Foreground="{DynamicResource SubText}"/>
+          <TextBlock Text="Chuyển account Claude Desktop và CLI" FontSize="12" Foreground="{DynamicResource SubText}"/>
         </StackPanel>
       </Grid>
+      <Grid x:Name="ToolTabs" Margin="0,0,0,12">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <Button x:Name="DesktopTab" Style="{StaticResource Ghost}" Content="Desktop" Margin="0,0,6,0" Visibility="Collapsed"/>
+        <Button x:Name="CliTab" Grid.Column="1" Style="{StaticResource Ghost}" Content="CLI" Margin="0,0,6,0" Visibility="Collapsed"/>
+        <Button x:Name="ScanBtn" Grid.Column="2" Style="{StaticResource Ghost}" Content="Quét lại"/>
+      </Grid>
+      <TextBlock x:Name="NoToolsText" Text="Chưa tìm thấy Claude Desktop hoặc Claude CLI. Cài một ứng dụng rồi bấm Quét lại." TextWrapping="Wrap" Foreground="{DynamicResource SubText}" Margin="4,0,4,14" Visibility="Collapsed"/>
       <StackPanel x:Name="Cards"/>
+      <StackPanel x:Name="CliPanel" Visibility="Collapsed">
+        <TextBlock x:Name="CliInfo" TextWrapping="Wrap" Foreground="{DynamicResource SubText}" Margin="4,0,4,12"/>
+        <StackPanel x:Name="CliCards"/>
+        <Button x:Name="CliLoginBtn" Style="{StaticResource Primary}" Content="Đăng nhập CLI" Margin="0,0,0,8"/>
+        <Button x:Name="CliOpenBtn" Style="{StaticResource Ghost}" Content="Mở Claude CLI" Margin="0,0,0,12"/>
+      </StackPanel>
       <Border x:Name="PanelProgress" Visibility="Collapsed" Background="{DynamicResource Card}" BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" CornerRadius="14" Padding="18" Margin="0,0,0,12">
         <StackPanel>
           <TextBlock x:Name="ProgTitle" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource Text}" TextWrapping="Wrap" Margin="0,0,0,14"/>
@@ -214,12 +230,14 @@ $MainXaml = @'
         </StackPanel>
       </Border>
       <TextBlock x:Name="Toast" Foreground="{DynamicResource SubText}" TextWrapping="Wrap" FontSize="12" Margin="4,0,4,8" Visibility="Collapsed"/>
+      <StackPanel x:Name="DesktopFooter">
       <Grid Margin="2,4,0,0">
         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <CheckBox x:Name="SyncChk" Style="{StaticResource SwitchBox}" Content="Hiện session ở cả 2 account" IsChecked="True"/>
         <Button x:Name="MoreBtn" Grid.Column="1" Style="{StaticResource IconBtn}" Content="&#xE712;" ToolTip="Thêm tùy chọn"/>
       </Grid>
       <Button x:Name="SyncNowBtn" Style="{StaticResource Ghost}" Content="Đồng bộ session ngay" Margin="2,10,0,0" HorizontalAlignment="Stretch" IsEnabled="False" ToolTip="Cập nhật session mới nhất giữa hai account"/>
+      </StackPanel>
     </StackPanel>
     <Popup x:Name="MorePopup" PlacementTarget="{Binding ElementName=MoreBtn}" Placement="Top" HorizontalOffset="-196" VerticalOffset="-4" StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
       <Border Width="230" Margin="6" Background="{DynamicResource Card}" BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" CornerRadius="10" Padding="4">
@@ -260,6 +278,7 @@ $SyncNowBtn = $win.FindName('SyncNowBtn')
 $Overlay = $win.FindName('Overlay'); $ConfirmTitle = $win.FindName('ConfirmTitle'); $ConfirmBody = $win.FindName('ConfirmBody')
 $ConfirmExtra = $win.FindName('ConfirmExtra'); $SkipChk = $win.FindName('SkipChk'); $ConfirmOk = $win.FindName('ConfirmOk'); $ConfirmCancel = $win.FindName('ConfirmCancel')
 $Root = $win.FindName('Root')
+foreach ($name in @('ToolTabs','DesktopTab','CliTab','ScanBtn','NoToolsText','CliPanel','CliInfo','CliCards','CliLoginBtn','CliOpenBtn','DesktopFooter')) { Set-Variable -Name $name -Value $win.FindName($name) }
 
 function Set-Theme([bool]$dark) {
     $AppState.Dark = $dark
@@ -316,15 +335,21 @@ function Start-EngineJob([string[]]$engineArgs, [scriptblock]$onLine, [scriptblo
     $prog = Join-Path $dir ($id + '.jsonl'); $out = Join-Path $dir ($id + '.out.json')
     $al = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $Engine, '-DataDir', $DataDir, '-StoreDir', $StoreDir, '-ClaudeJson', $ClaudeJson, '-ProgressFile', $prog, '-OutFile', $out)
     if ($NoAppControl) { $al += '-NoAppControl' }
+    if ($CliPath) { $al += @('-CliPath',$CliPath) }
+    if ($CliConfigDir) { $al += @('-CliConfigDir',$CliConfigDir) }
+    if ($CliConfigFile) { $al += @('-CliConfigFile',$CliConfigFile) }
     $al += $engineArgs
     $psi = New-Object Diagnostics.ProcessStartInfo
     $psi.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $psi.Arguments = (($al | ForEach-Object { Quote-Arg ([string]$_) }) -join ' ')
     $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; $psi.WindowStyle = 'Hidden'
+    $psi.RedirectStandardError=$true; $psi.RedirectStandardOutput=$true
     $proc = [Diagnostics.Process]::Start($psi)
-    $job = @{ Proc = $proc; Prog = $prog; Out = $out; Pos = 0; OnLine = $onLine; OnDone = $onDone; Lines = (New-Object System.Collections.ArrayList); Exit = $null }
+    $job = @{ Proc = $proc; Prog = $prog; Out = $out; Pos = 0; OnLine = $onLine; OnDone = $onDone; Lines = (New-Object System.Collections.ArrayList); Exit = $null; Stderr=$proc.StandardError.ReadToEndAsync(); Stdout=$proc.StandardOutput.ReadToEndAsync() }
     [void]$AppState.Jobs.Add($job)
-    Gui-Log ('engine start: ' + ($engineArgs -join ' ').Replace($DataDir, '<data>'))
+    $description = $engineArgs -join ' '
+    if ($DataDir) { $description=$description.Replace($DataDir,'<data>') }
+    Gui-Log ('engine start: ' + $description)
     return $job
 }
 
@@ -356,7 +381,9 @@ function Pump-Jobs {
             if ($exited) {
                 $job.Exit = $job.Proc.ExitCode
                 [void]$AppState.Jobs.Remove($job)
+                if ($job.Exit -ne 0) { Gui-Log ('engine exit {0}: {1}' -f $job.Exit,(Read-EngineError $job)) }
                 if ($job.OnDone) { try { & $job.OnDone $job } catch { Gui-Log ('OnDone lỗi: ' + $_.Exception.Message) } }
+                $job.Proc.Dispose()
             }
         } catch { Gui-Log ('Pump lỗi: ' + $_.Exception.Message); [void]$AppState.Jobs.Remove($job) }
     }
@@ -506,6 +533,7 @@ function New-PendingCard {
 }
 
 function Render-Accounts {
+    if ($AppState.ActiveTool -eq 'cli') { Render-CliAccounts; return }
     $Cards.Children.Clear()
     $AppState.Primary = $null
     $st = $AppState.Status
@@ -553,6 +581,7 @@ $BarWidth = 382
 
 function Show-ProgressPanel([string]$title, $steps) {
     $AppState.Mode = 'progress'
+    Update-DetectedTools
     Update-SyncButton
     $Cards.Children.Clear(); $Toast.Visibility = 'Collapsed'
     $PanelProgress.Visibility = 'Visible'
@@ -624,7 +653,7 @@ function Show-Toast([string]$msg) {
 
 function Update-SyncButton {
     $profiles = @($AppState.Status.profiles | Where-Object { $_.hasAuth })
-    $SyncNowBtn.IsEnabled = ($AppState.Mode -eq 'accounts' -and -not $AppState.Busy -and $profiles.Count -ge 2)
+    $SyncNowBtn.IsEnabled = ($AppState.ActiveTool -eq 'desktop' -and $AppState.Mode -eq 'accounts' -and -not $AppState.Busy -and $profiles.Count -ge 2)
 }
 
 function Start-SessionSync {
@@ -707,9 +736,35 @@ function Handle-ProgressLine($job, $l) {
 function Get-FailMessage($job) {
     $msg = ''
     foreach ($l in $job.Lines) { if ($l.state -eq 'error') { $msg = [string]$l.message } }
-    if (-not $msg) { $msg = 'Có lỗi không xác định. Bạn có thể xem log trong menu "..." ở góc dưới.' }
+    if (-not $msg -and $job.Prog -and (Test-Path -LiteralPath $job.Prog)) {
+        try {
+            foreach($line in [IO.File]::ReadAllLines($job.Prog,[Text.Encoding]::UTF8)) {
+                $record=$line|ConvertFrom-Json -ErrorAction Stop
+                if($record.state -eq 'error'){$msg=[string]$record.message}
+            }
+        } catch {}
+    }
+    if (-not $msg -and $job.Out -and (Test-Path -LiteralPath $job.Out)) {
+        try { $result=[IO.File]::ReadAllText($job.Out,[Text.Encoding]::UTF8)|ConvertFrom-Json -ErrorAction Stop; if($result.ok -eq $false -and $result.message){$msg=[string]$result.message} } catch {}
+    }
+    if (-not $msg) {
+        $details=Read-EngineError $job
+        $msg='Tiến trình xử lý dừng với mã '+[string]$job.Exit+'.'
+        if($details){$msg+=' '+$details}else{$msg+=' Chưa ghi được thông tin lỗi; hãy thử lại hoặc xem log.'}
+    }
     foreach ($k in $AppState.StepOrder) { if ($AppState.StepUi[$k].State -eq 'running') { Set-Step $k 'error'; break } }
     return $msg
+}
+
+function Read-EngineError($job) {
+    $text=''
+    if($job.Stderr -and $job.Stderr.IsCompleted){try{$text=[string]$job.Stderr.GetAwaiter().GetResult()}catch{}}
+    $text=[regex]::Replace($text,'(?i)(Bearer\s+)[^\s"'']+','$1[ẩn]')
+    $text=[regex]::Replace($text,'(?i)sk-[a-z0-9_-]+','[ẩn]')
+    $text=[regex]::Replace($text,'(?i)("(?:accessToken|refreshToken|oauth:tokenCache(?:V2)?|tokenCache(?:V2)?|password|apiKey)"\s*:\s*)"(?:[^"\\]|\\.)*"','$1"[ẩn]"')
+    $text=$text.Trim()
+    if($text.Length -gt 1800){$text=$text.Substring(0,1800)+'…'}
+    return $text
 }
 
 function Start-Switch([string]$uuid) {
@@ -833,9 +888,18 @@ function Refresh-Status {
         try { if ($job.Exit -eq 0 -and (Test-Path -LiteralPath $job.Out)) { $st = [IO.File]::ReadAllText($job.Out, [Text.Encoding]::UTF8) | ConvertFrom-Json } } catch {}
         if (-not $st) { return }
         $AppState.Status = $st
-        if ($st.unsavedCurrent -and -not $AppState.SavedOnce) {
+        Update-DetectedTools
+        if ($st.tools.desktop -and $st.unsavedCurrent -and -not $AppState.SavedOnce) {
             $AppState.SavedOnce = $true
             [void](Start-EngineJob @('-Action', 'Save') $null { param($j2) Refresh-Status })
+        }
+        if ($st.cli.installed -and $st.cli.unsavedCurrent -and -not $AppState.CliSavedOnce) {
+            $AppState.CliSavedOnce=$true
+            [void](Start-EngineJob @('-Action','CliSave') $null { param($job) Refresh-Status })
+        }
+        if ($st.cli.pendingLogin.state -eq 'ready' -and -not $AppState.Busy -and $AppState.CliFinishedId -ne $st.cli.pendingLogin.id) {
+            $AppState.CliFinishedId=$st.cli.pendingLogin.id
+            Start-CliAction 'CliFinishLogin'
         }
         $AppState.Loading = $true
         $SyncChk.IsChecked = [bool]$st.settings.syncSessions
@@ -859,6 +923,10 @@ function Update-Tray {
     if (-not $notify) { return }
     $name = 'chưa đăng nhập'
     if ($AppState.Status -and $AppState.Status.activeUuid) { $name = Get-Label ([string]$AppState.Status.activeUuid) }
+    if ($AppState.ActiveTool -eq 'cli') {
+        $name='CLI chưa đăng nhập'
+        foreach($p in @($AppState.Status.cli.profiles)){if($p.isActive){$name='CLI: '+[string]$p.label;break}}
+    }
     $t = "Claude Switch - $name"
     if ($t.Length -gt 62) { $t = $t.Substring(0, 62) }
     $notify.Text = $t
@@ -866,15 +934,31 @@ function Update-Tray {
 function Build-TrayMenu {
     $menu.Items.Clear()
     $cur = 'chưa đăng nhập'; if ($AppState.Status -and $AppState.Status.activeUuid) { $cur = Get-Label ([string]$AppState.Status.activeUuid) }
-    $h = New-Object Windows.Forms.ToolStripMenuItem ("Đang dùng: $cur"); $h.Enabled = $false
-    [void]$menu.Items.Add($h)
-    if ($AppState.Status) {
+    if ($AppState.Status.tools.desktop) {
+        $h = New-Object Windows.Forms.ToolStripMenuItem ("Desktop: $cur"); $h.Enabled = $false
+        [void]$menu.Items.Add($h)
+    }
+    if ($AppState.Status.tools.desktop) {
         foreach ($p in @($AppState.Status.profiles)) {
             if (-not $p.isActive -and $p.hasAuth) {
                 $it = New-Object Windows.Forms.ToolStripMenuItem ("Chuyển sang " + $(if ($p.label) { $p.label } else { $p.email }))
                 $it.Tag = [string]$p.uuid
                 $it.Add_Click({ param($s, $e) Show-MainWindow; Begin-Switch ([string]$s.Tag) })
                 [void]$menu.Items.Add($it)
+            }
+        }
+    }
+    if ($AppState.Status.cli.installed) {
+        $cliName='chưa đăng nhập'
+        foreach($p in @($AppState.Status.cli.profiles)){if($p.isActive){$cliName=[string]$p.label;break}}
+        $heading=New-Object Windows.Forms.ToolStripMenuItem ('CLI: '+$cliName);$heading.Enabled=$false
+        [void]$menu.Items.Add($heading)
+        foreach($p in @($AppState.Status.cli.profiles)){
+            if(-not $p.isActive -and $p.hasAuth){
+                $item=New-Object Windows.Forms.ToolStripMenuItem ('Chuyển CLI sang '+[string]$p.label)
+                $item.Tag=[string]$p.uuid
+                $item.Add_Click({param($sender,$event) Show-MainWindow; Select-ClaudeTool 'cli'; Start-CliAction 'CliSwitch' ([string]$sender.Tag)})
+                [void]$menu.Items.Add($item)
             }
         }
     }
@@ -933,6 +1017,13 @@ function Set-PreviewData([string]$state) {
     $a = [pscustomobject]@{ uuid = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'; label = 'Hà An'; email = 'ha.an@example.com'; displayName = 'Hà An'; sessionCount = 65; isActive = $false; hasAuth = $true }
     $b = [pscustomobject]@{ uuid = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'; label = 'Bình Nguyễn'; email = 'binh.nguyen@example.com'; displayName = 'Bình Nguyễn'; sessionCount = 12; isActive = $true; hasAuth = $true }
     $AppState.Status = [pscustomobject]@{ profiles = @($a, $b); activeUuid = $b.uuid; recentActive = 0; loggedIn = $true; pendingAdd = $null; configError = $null; settings = [pscustomobject]@{ syncSessions = $true } }
+    $AppState.Status | Add-Member tools ([pscustomobject]@{desktop=$true;cli=$true})
+    $AppState.Status | Add-Member cli ([pscustomobject]@{installed=$true;loggedIn=$true;activeUuid=$b.uuid;profiles=@($a,$b);authOverrides=@();runningCount=0;pendingLogin=$null})
+    if ($state -eq 'cli-only') { $AppState.Status.tools.desktop=$false }
+    if ($state -eq 'desktop-only') { $AppState.Status.tools.cli=$false }
+    if ($state -eq 'none') { $AppState.Status.tools.desktop=$false; $AppState.Status.tools.cli=$false }
+    if ($state -in @('cli','cli-only')) { $AppState.ActiveTool='cli' }
+    Update-DetectedTools
     $AppState.Loading = $true; $SyncChk.IsChecked = $true; $AppState.Loading = $false
     switch ($state) {
         'one' { $AppState.Status.profiles = @($b); Render-Accounts }
@@ -963,7 +1054,17 @@ function Set-PreviewData([string]$state) {
     }
 }
 
+. (Join-Path $PSScriptRoot 'ClaudeSwitch.CliUI.ps1')
+
 # ---------------------------------------------------------------- sự kiện cửa sổ
+$DesktopTab.Add_Click({ Select-ClaudeTool 'desktop' })
+$CliTab.Add_Click({ Select-ClaudeTool 'cli' })
+$ScanBtn.Add_Click({ Refresh-Status })
+$CliLoginBtn.Add_Click({
+    $pending=$AppState.Status.cli.pendingLogin
+    if ($pending.state -eq 'ready') { Start-CliAction 'CliFinishLogin' } else { Start-CliAction 'CliLogin' }
+})
+$CliOpenBtn.Add_Click({ Start-CliAction 'CliOpen' })
 $ConfirmOk.Add_Click({ Do-ConfirmOk })
 $ConfirmCancel.Add_Click({ Hide-Confirm })
 $BtnPrimary.Add_Click({ if ($AppState.ProgPrimary) { & $AppState.ProgPrimary } })
@@ -1075,6 +1176,11 @@ $pump.Add_Tick({
     } catch { Gui-Log ('Tick lỗi: ' + $_.Exception.Message) }
 })
 $pump.Start()
+
+$cliPoll = New-Object Windows.Threading.DispatcherTimer
+$cliPoll.Interval = [TimeSpan]::FromSeconds(5)
+$cliPoll.Add_Tick({ if (-not $AppState.Busy -and ($AppState.ActiveTool -eq 'cli' -or $AppState.Status.cli.pendingLogin)) { Refresh-Status } })
+$cliPoll.Start()
 
 $AppState.AddTimer = New-Object Windows.Threading.DispatcherTimer
 $AppState.AddTimer.Interval = [TimeSpan]::FromSeconds(2)

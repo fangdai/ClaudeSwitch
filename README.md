@@ -1,6 +1,19 @@
 # Claude Switch
 
-Chuyển ứng dụng Claude Desktop giữa **2 account Claude Pro của chính bạn** chỉ với một cú nhấp, và vẫn thấy các session Claude Code ở cả hai account. Không cần cài thêm gì (Windows PowerShell 5.1 có sẵn).
+Chuyển account **Claude Desktop và Claude Code CLI** trên Windows. Công cụ tự nhận diện phần đã cài và chỉ hiện mục tương ứng. Hai phần có danh sách account riêng; phần Desktop vẫn đồng bộ session giữa hai account. Không cần cài thêm thư viện (Windows PowerShell 5.1 có sẵn).
+
+## Claude CLI
+
+1. Mở mục **CLI**. Nếu vừa cài Claude CLI khi công cụ đang mở, bấm **Quét lại**.
+2. Account CLI đã đăng nhập được lưu tự động. Nếu chưa đăng nhập, bấm **Đăng nhập CLI**; công cụ mở `claude auth login --claudeai` trong cửa sổ riêng. Bạn tự đăng nhập trong trình duyệt hoặc nhập mã vào cửa sổ CLI nếu được yêu cầu.
+3. Bấm **Thêm account CLI** để đăng nhập account khác. Đăng nhập mới dùng thư mục riêng và không đăng xuất account hiện tại.
+4. Thoát các phiên Claude CLI đang chạy rồi bấm **Chuyển CLI sang ...**. Mở một phiên CLI mới bằng lệnh `claude` hoặc nút **Mở Claude CLI** để dùng account đã chọn.
+
+Chỉ thay thông tin OAuth và account tương ứng trong cấu hình CLI; giữ nguyên settings, lịch sử, dự án và đăng nhập MCP khác. Công cụ không tự đóng các phiên CLI đang chạy. Nếu CLI dùng API key, token qua biến môi trường hoặc nhà cung cấp bên ngoài, giao diện giải thích cấu hình đang ghi đè và không giả vờ chuyển account OAuth.
+
+Account CLI được lưu bằng DPAPI trong `cli\profiles\<id>\auth.bin`. Trước khi chuyển, hai file cấu hình được sao lưu mã hóa trong `cli\backups`; lỗi khi ghi sẽ khôi phục cả hai. Tài khoản Desktop không tự trở thành đăng nhập CLI: cần đăng nhập CLI một lần cho mỗi account.
+
+Tham khảo [đăng nhập Claude Code](https://code.claude.com/docs/en/authentication) và [lệnh CLI](https://code.claude.com/docs/en/cli-reference).
 
 ## Cài đặt
 
@@ -41,4 +54,10 @@ Nếu có lỗi sau khi sao lưu, công cụ tự khôi phục lại cấu hình
 
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File Tests\Run-Tests.ps1 -Scratch <thư mục tạm>
+```
+
+Kiểm tra CLI bằng dữ liệu giả, không đăng nhập thật:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -STA -File Tests\Run-CliTests.ps1 -Scratch <thư mục tạm> -VerifyGui
 ```

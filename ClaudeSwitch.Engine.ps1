@@ -7,12 +7,15 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Status','Save','Switch','PrepareAdd','SyncSessions','RemoveCopies','SetLabel','CheckConfig')]
+    [ValidateSet('Status','Save','Switch','PrepareAdd','SyncSessions','RemoveCopies','SetLabel','CheckConfig','CliSave','CliSwitch','CliLogin','CliFinishLogin','CliOpen','CliSetLabel')]
     [string]$Action = 'Status',
     [string]$TargetAccount,
     [string]$DataDir,
     [string]$StoreDir,
     [string]$ClaudeJson,
+    [string]$CliPath,
+    [string]$CliConfigDir,
+    [string]$CliConfigFile,
     [switch]$NoAppControl,
     [string]$ProgressFile,
     [string]$OutFile,
@@ -321,6 +324,7 @@ function Get-ClaudeJsonAccount {
 }
 
 function Get-OrgFolders([string]$acct) {
+    if (-not $script:SessionsRoot) { return @() }
     $root = Join-Path $script:SessionsRoot $acct
     if (-not (Test-Path -LiteralPath $root)) { return @() }
     return @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue)
@@ -337,7 +341,7 @@ function Get-NewestOrg([string]$acct) {
     return $best
 }
 function Get-SessionCount([string]$acct, [string]$org) {
-    if (-not $org) { return 0 }
+    if (-not $org -or -not $script:SessionsRoot) { return 0 }
     $p = Join-Path (Join-Path $script:SessionsRoot $acct) $org
     if (-not (Test-Path -LiteralPath $p)) { return 0 }
     return @(Get-ChildItem -LiteralPath $p -Filter 'local_*.json' -File -ErrorAction SilentlyContinue).Count
@@ -431,19 +435,44 @@ function Restore-Backup($bk) {
 
 # ---------------------------------------------------------------- dieu khien app
 function Get-ClaudeProcs {
-    return @(Get-Process -Name Claude -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -like '*\WindowsApps\Claude_*' } catch { $false } })
+    return @(Get-Process -Name Claude -ErrorAction SilentlyContinue | Where-Object { try { -not $_.HasExited -and $_.Path -like '*\WindowsApps\Claude_*' } catch { $false } })
+}
+
+function Stop-ClaudeProcessTree($process) {
+    # Target only a verified Desktop process, never the standalone CLI executable.
+    try {
+        $live=Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+        if (-not $live -or $live.HasExited -or $live.Path -notlike '*\WindowsApps\Claude_*' -or $live.StartTime -ne $process.StartTime) { return }
+        $taskkill=Join-Path $env:SystemRoot 'System32\taskkill.exe'
+        $psi=New-Object Diagnostics.ProcessStartInfo
+        $psi.FileName=$taskkill; $psi.Arguments='/PID '+$live.Id+' /T /F'
+        $psi.UseShellExecute=$false; $psi.CreateNoWindow=$true; $psi.WindowStyle='Hidden'
+        $psi.RedirectStandardError=$true; $psi.RedirectStandardOutput=$true
+        $killer=[Diagnostics.Process]::Start($psi)
+        try {
+            $stderr=$killer.StandardError.ReadToEndAsync(); $stdout=$killer.StandardOutput.ReadToEndAsync()
+            if($killer.WaitForExit(5000)){$code=$killer.ExitCode}else{$code=-1;try{$killer.Kill()}catch{}}
+        } finally { $killer.Dispose() }
+        if ($code -ne 0) { Write-Log ('taskkill Desktop PID {0}: exit {1}' -f $live.Id,$code) }
+    } catch { Write-Log ('Không đóng được tiến trình Desktop PID {0}: {1}' -f $process.Id,$_.Exception.Message) }
 }
 
 function Stop-ClaudeApp {
     if ($NoAppControl) { Write-Log 'NoAppControl: bỏ qua đóng app.'; return }
     $procs = Get-ClaudeProcs
     if ($procs.Count -eq 0) { return }
+    $mainIds=@($procs | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } | ForEach-Object { $_.Id })
     foreach ($p in $procs) { try { [void]$p.CloseMainWindow() } catch {} }
     $end = (Get-Date).AddSeconds(4)
     while ((Get-Date) -lt $end -and (Get-ClaudeProcs).Count -gt 0) { Start-Sleep -Milliseconds 300 }
-    foreach ($p in (Get-ClaudeProcs)) { try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch {} }
     $end = (Get-Date).AddSeconds(10)
-    while ((Get-Date) -lt $end -and (Get-ClaudeProcs).Count -gt 0) { Start-Sleep -Milliseconds 300 }
+    while ((Get-Date) -lt $end) {
+        $remaining=@(Get-ClaudeProcs)
+        if ($remaining.Count -eq 0) { break }
+        # Kill the main tree first; re-enumerate to catch helpers spawned while closing.
+        foreach ($p in @($remaining | Sort-Object { if($mainIds -contains $_.Id){0}else{1} })) { Stop-ClaudeProcessTree $p }
+        Start-Sleep -Milliseconds 300
+    }
     if ((Get-ClaudeProcs).Count -gt 0) { throw 'Không đóng hẳn được Claude. Hãy tự thoát Claude (kể cả ở khay hệ thống) rồi thử lại. Chưa có gì bị thay đổi.' }
     Start-Sleep -Milliseconds 800
 }
@@ -610,8 +639,8 @@ function Get-StatusObject {
         if (-not $org) { $org = Get-NewestOrg $p.Uuid }
         $isActive = [bool]($active -and ($active -ieq $p.Uuid))
         if ($isActive) {
-            $dir = Join-Path (Join-Path $script:SessionsRoot $p.Uuid) $org
-            if ($org -and (Test-Path -LiteralPath $dir)) {
+            $dir = if ($script:SessionsRoot -and $org) { Join-Path (Join-Path $script:SessionsRoot $p.Uuid) $org } else { $null }
+            if ($dir -and (Test-Path -LiteralPath $dir)) {
                 foreach ($f in (Get-ChildItem -LiteralPath $dir -Filter 'local_*.json' -File)) {
                     if (($now - [DateTimeOffset]::new($f.LastWriteTimeUtc).ToUnixTimeMilliseconds()) -gt 3600000) { continue }
                     $ms = Get-LastActivityMs $f.FullName
@@ -633,8 +662,11 @@ function Get-StatusObject {
     $pend = Read-JsonFile (Join-Path $StoreDir 'pending-add.json')
     $man = Read-Manifest
     $s = Get-Settings
+    $cli = Get-CliStatus
+    $desktopInstalled = if ($NoAppControl) { [bool]($script:ConfigPath -and (Test-Path -LiteralPath $script:ConfigPath)) } else { [bool](Get-ClaudeAppId) }
     return [ordered]@{
         ok = $true; dataDir = $DataDir; storeDir = $StoreDir; loggedIn = [bool]$active; activeUuid = $active; unsavedCurrent = $unsaved
+        tools = @{ desktop = $desktopInstalled; cli = [bool]$cli.installed }; cli = $cli
         appRunning = $running; profiles = $plist.ToArray(); recentActive = $recent; copiedCount = $man.Copies.Count
         settings = $s; pendingAdd = $(if ($pend) { $pend } else { $null }); configError = $cfgErr
     }
@@ -775,6 +807,7 @@ function Invoke-CheckConfig {
 }
 
 # ---------------------------------------------------------------- main
+. (Join-Path $PSScriptRoot 'ClaudeSwitch.Cli.ps1')
 $exitCode = 0
 try {
     if ($Action -ne 'CheckConfig') { Ensure-Dir $StoreDir; Write-Log ("== Action: {0}" -f $Action) }
@@ -817,10 +850,28 @@ try {
             Write-Step 'label' 'ok' 'Đã đổi tên.'
         }
         'CheckConfig' { Emit (Invoke-CheckConfig) }
+        'CliSave' { Invoke-CliLocked { Save-CliProfile (Read-CliState) }; Emit @{ok=$true} }
+        'CliSwitch' { Invoke-CliLocked { Invoke-CliSwitch $TargetAccount }; Emit @{ok=$true} }
+        'CliLogin' { Invoke-CliLocked { Invoke-CliLogin }; Emit @{ok=$true} }
+        'CliFinishLogin' { Invoke-CliLocked { Complete-CliLogin }; Emit @{ok=$true} }
+        'CliOpen' { [void](Start-CliHost 'open'); Emit @{ok=$true} }
+        'CliSetLabel' {
+            Invoke-CliLocked {
+                if ($TargetAccount -notmatch $script:GuidRx) { throw 'Mã account CLI không hợp lệ.' }
+                $path=Join-Path (Get-CliProfileDir $TargetAccount) 'meta.json'
+                $meta=Read-JsonFile $path
+                $clean=([regex]::Replace([string]$Label,'[\x00-\x1f]','')).Trim()
+                if (-not $meta -or -not $clean) { throw 'Tên account CLI không hợp lệ.' }
+                if ($clean.Length -gt 30) { $clean=$clean.Substring(0,30) }
+                $meta['label']=$clean; Write-JsonFile $path $meta
+            }
+            Emit @{ok=$true}
+        }
     }
 } catch {
     $m = $_.Exception.Message
     Write-Step 'done' 'error' $m
+    try { Emit ([ordered]@{ok=$false;message=$m}) } catch {}
     $exitCode = 1
 }
 if ($exitCode -eq 0 -and $Action -in @('Switch', 'PrepareAdd')) { }
