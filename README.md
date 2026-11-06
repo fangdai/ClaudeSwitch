@@ -15,6 +15,14 @@ Account CLI được lưu bằng DPAPI trong `cli\profiles\<id>\auth.bin`. Trư�
 
 Tham khảo [đăng nhập Claude Code](https://code.claude.com/docs/en/authentication) và [lệnh CLI](https://code.claude.com/docs/en/cli-reference).
 
+## Xem usage của các account
+
+Mỗi thẻ account trong mục Desktop và CLI có mức **đã dùng** của cửa sổ 5 giờ, 7 ngày và thời gian reset khi máy chủ cung cấp. Bấm **Cập nhật usage** để kiểm tra cả các account đã lưu. Công cụ dùng chung kết quả theo mã account và tự cập nhật khoảng 2 phút một lần.
+
+Usage trực tiếp sử dụng đăng nhập CLI của account tương ứng. Token của account CLI chưa được chọn được làm mới khi dịch vụ cho phép. Nếu đăng nhập hết hiệu lực, thẻ account hiển thị thông báo hoặc dữ liệu Desktop đã ghi nhận theo đúng organization, kèm thời điểm quan sát. Dòng **Dữ liệu lưu lúc** và thông báo nguồn Desktop xác định kết quả từ cache. Đăng nhập lại account đó ở mục CLI để cập nhật trực tiếp.
+
+Khi máy chủ giới hạn lượt kiểm tra, công cụ đợi theo thời gian thử lại và giữ kết quả gần nhất.
+
 ## Cài đặt
 
 1. Bấm đúp **`Cai dat.bat`**.

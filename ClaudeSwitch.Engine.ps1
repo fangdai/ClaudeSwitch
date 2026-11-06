@@ -7,7 +7,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Status','Save','Switch','PrepareAdd','SyncSessions','RemoveCopies','SetLabel','CheckConfig','CliSave','CliSwitch','CliLogin','CliFinishLogin','CliOpen','CliSetLabel')]
+    [ValidateSet('Status','Save','Switch','PrepareAdd','SyncSessions','RemoveCopies','SetLabel','CheckConfig','CliSave','CliSwitch','CliLogin','CliFinishLogin','CliOpen','CliSetLabel','RefreshUsage')]
     [string]$Action = 'Status',
     [string]$TargetAccount,
     [string]$DataDir,
@@ -20,7 +20,8 @@ param(
     [string]$ProgressFile,
     [string]$OutFile,
     [string]$Label,
-    [string]$FailAt
+    [string]$FailAt,
+    [switch]$ForceUsage
 )
 
 $ErrorActionPreference = 'Stop'
@@ -667,6 +668,7 @@ function Get-StatusObject {
     return [ordered]@{
         ok = $true; dataDir = $DataDir; storeDir = $StoreDir; loggedIn = [bool]$active; activeUuid = $active; unsavedCurrent = $unsaved
         tools = @{ desktop = $desktopInstalled; cli = [bool]$cli.installed }; cli = $cli
+        usage = (Read-UsageCache)
         appRunning = $running; profiles = $plist.ToArray(); recentActive = $recent; copiedCount = $man.Copies.Count
         settings = $s; pendingAdd = $(if ($pend) { $pend } else { $null }); configError = $cfgErr
     }
@@ -808,6 +810,7 @@ function Invoke-CheckConfig {
 
 # ---------------------------------------------------------------- main
 . (Join-Path $PSScriptRoot 'ClaudeSwitch.Cli.ps1')
+. (Join-Path $PSScriptRoot 'ClaudeSwitch.Usage.ps1')
 $exitCode = 0
 try {
     if ($Action -ne 'CheckConfig') { Ensure-Dir $StoreDir; Write-Log ("== Action: {0}" -f $Action) }
@@ -850,6 +853,7 @@ try {
             Write-Step 'label' 'ok' 'Đã đổi tên.'
         }
         'CheckConfig' { Emit (Invoke-CheckConfig) }
+        'RefreshUsage' { Emit (Invoke-RefreshUsage ([bool]$ForceUsage)) }
         'CliSave' { Invoke-CliLocked { Save-CliProfile (Read-CliState) }; Emit @{ok=$true} }
         'CliSwitch' { Invoke-CliLocked { Invoke-CliSwitch $TargetAccount }; Emit @{ok=$true} }
         'CliLogin' { Invoke-CliLocked { Invoke-CliLogin }; Emit @{ok=$true} }

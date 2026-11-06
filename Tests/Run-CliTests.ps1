@@ -110,14 +110,33 @@ Copy-Item -LiteralPath $configFile -Destination (Join-Path $renewalDir '.claude.
 [IO.File]::WriteAllText((Join-Path $storeDir 'cli\pending-login.json'),('{"id":"'+$renewalId+'"}'),$utf8)
 $r=Run 'CliFinishLogin'
 Check ($r.Code -eq 0 -and (Get-Content $credFile -Raw -Encoding UTF8|ConvertFrom-Json).claudeAiOauth.accessToken -eq 'CLI-FAKE-SECRET-A-RENEWED') 'Re-login to the active account installs its renewed credentials'
+# The CLI rotates tokens on its own; the saved copy must follow so switching back is not revoked.
+[IO.File]::WriteAllText($credFile,[IO.File]::ReadAllText($credFile).Replace('CLI-FAKE-SECRET-A-RENEWED','CLI-FAKE-SECRET-A-ROTATED').Replace('CLI-FAKE-REFRESH-A','CLI-FAKE-REFRESH-A-ROTATED'),$utf8)
+$r=Run 'Status'
+$r=Run 'CliSwitch' $B
+$r=Run 'CliSwitch' $A
+$creds=Get-Content $credFile -Raw -Encoding UTF8|ConvertFrom-Json
+Check ($r.Code -eq 0 -and $creds.claudeAiOauth.accessToken -eq 'CLI-FAKE-SECRET-A-ROTATED' -and $creds.claudeAiOauth.refreshToken -eq 'CLI-FAKE-REFRESH-A-ROTATED') 'Tokens rotated by the running CLI are kept for the next switch'
+$r=Run 'CliSwitch' $B
+[IO.File]::WriteAllText($credFile,[IO.File]::ReadAllText($credFile).Replace('9999999999999','1000'),$utf8)
+$r=Run 'Status'
+$r=Run 'CliSwitch' $A
+$hc=Hash $credFile; $hj=Hash $configFile
+$r=Run 'CliSwitch' $B
+Check ($r.Code -ne 0 -and $r.Data.message -match 'hết hiệu lực' -and (Hash $credFile) -eq $hc -and (Hash $configFile) -eq $hj) 'Expired saved login is refused without changing the current CLI'
+$badFiles=@(Get-ChildItem -LiteralPath $storeDir -Recurse -File | Where-Object {$_.Extension -in @('.log','.json')} | Where-Object {[IO.File]::ReadAllText($_.FullName) -match 'CLI-FAKE-SECRET|CLI-FAKE-REFRESH'})
+Check ($badFiles.Count -eq 0) 'Automatic profile sync writes no secrets in plain text'
+WriteAccount $B; $r=Run 'Status'; $r=Run 'CliSwitch' $A
 if($VerifyGui){
     & {
         $engineForTest=$engine
         $uiForTest=Join-Path $root 'ClaudeSwitch.CliUI.ps1'
+        $usageUiForTest=Join-Path $root 'ClaudeSwitch.UsageUI.ps1'
         $gui=Join-Path $root 'ClaudeSwitch.ps1'
         $source=[IO.File]::ReadAllText($gui)
         $prefix=$source.Substring(0,$source.IndexOf('if ($IsPreview) {'))
         $prefix=$prefix.Replace('$Engine = Join-Path $PSScriptRoot ''ClaudeSwitch.Engine.ps1''','$Engine=$engineForTest').Replace('. (Join-Path $PSScriptRoot ''ClaudeSwitch.CliUI.ps1'')','. $uiForTest')
+        $prefix=$prefix.Replace('. (Join-Path $PSScriptRoot ''ClaudeSwitch.UsageUI.ps1'')','. $usageUiForTest')
         . ([scriptblock]::Create($prefix)) -DataDir $desktopDir -StoreDir $storeDir -ClaudeJson (Join-Path $testDir 'unused-claude.json') -CliPath $fakeExe -CliConfigDir $cliDir -CliConfigFile $configFile -NoAppControl
         $st=Run 'Status'
         $AppState.Status=$st.Data

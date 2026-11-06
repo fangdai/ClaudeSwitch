@@ -42,6 +42,7 @@ $AppState = @{
     PrevUuid = $null; TargetUuid = $null; ConfirmKind = ''; ConfirmArg = ''; Exiting = $false
     StatusBusy = $false; SavedOnce = $false; Loading = $false; AddTimer = $null; NewUuid = $null; AutoDone = $false
     Dark = $false; ActiveTool = 'desktop'; CliSavedOnce = $false; CliFinishedId = $null
+    Usage = $null; UsageBusy = $false; NextUsageCheck = [DateTimeOffset]::MinValue
 }
 
 function Gui-Log([string]$m) {
@@ -189,6 +190,7 @@ $MainXaml = @'
     </Style>
   </Window.Resources>
   <Grid x:Name="Root" Width="460" Background="{DynamicResource Bg}">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <StackPanel Margin="20,18,20,14">
       <Grid Margin="2,0,0,16">
         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -207,6 +209,11 @@ $MainXaml = @'
         <Button x:Name="ScanBtn" Grid.Column="2" Style="{StaticResource Ghost}" Content="Quét lại"/>
       </Grid>
       <TextBlock x:Name="NoToolsText" Text="Chưa tìm thấy Claude Desktop hoặc Claude CLI. Cài một ứng dụng rồi bấm Quét lại." TextWrapping="Wrap" Foreground="{DynamicResource SubText}" Margin="4,0,4,14" Visibility="Collapsed"/>
+      <Grid x:Name="UsageControls" Margin="2,0,0,12" Visibility="Collapsed">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <TextBlock x:Name="UsageUpdated" Text="Usage tài khoản" Foreground="{DynamicResource SubText}" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,8,0"/>
+        <Button x:Name="UsageRefreshBtn" Grid.Column="1" Style="{StaticResource Ghost}" Content="Cập nhật usage" FontSize="12" Padding="12,8"/>
+      </Grid>
       <StackPanel x:Name="Cards"/>
       <StackPanel x:Name="CliPanel" Visibility="Collapsed">
         <TextBlock x:Name="CliInfo" TextWrapping="Wrap" Foreground="{DynamicResource SubText}" Margin="4,0,4,12"/>
@@ -239,6 +246,7 @@ $MainXaml = @'
       <Button x:Name="SyncNowBtn" Style="{StaticResource Ghost}" Content="Đồng bộ session ngay" Margin="2,10,0,0" HorizontalAlignment="Stretch" IsEnabled="False" ToolTip="Cập nhật session mới nhất giữa hai account"/>
       </StackPanel>
     </StackPanel>
+    </ScrollViewer>
     <Popup x:Name="MorePopup" PlacementTarget="{Binding ElementName=MoreBtn}" Placement="Top" HorizontalOffset="-196" VerticalOffset="-4" StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
       <Border Width="230" Margin="6" Background="{DynamicResource Card}" BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" CornerRadius="10" Padding="4">
         <Border.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.25"/></Border.Effect>
@@ -270,6 +278,7 @@ $MainXaml = @'
 '@
 
 $win = [Windows.Markup.XamlReader]::Parse($MainXaml)
+$win.MaxHeight = [Math]::Max(400, [Windows.SystemParameters]::WorkArea.Height - 48)
 $Cards = $win.FindName('Cards'); $PanelProgress = $win.FindName('PanelProgress'); $ProgTitle = $win.FindName('ProgTitle')
 $StepsPanel = $win.FindName('StepsPanel'); $BarFill = $win.FindName('BarFill'); $ProgMsg = $win.FindName('ProgMsg')
 $BtnPrimary = $win.FindName('BtnPrimary'); $BtnSecondary = $win.FindName('BtnSecondary'); $Toast = $win.FindName('Toast')
@@ -278,7 +287,7 @@ $SyncNowBtn = $win.FindName('SyncNowBtn')
 $Overlay = $win.FindName('Overlay'); $ConfirmTitle = $win.FindName('ConfirmTitle'); $ConfirmBody = $win.FindName('ConfirmBody')
 $ConfirmExtra = $win.FindName('ConfirmExtra'); $SkipChk = $win.FindName('SkipChk'); $ConfirmOk = $win.FindName('ConfirmOk'); $ConfirmCancel = $win.FindName('ConfirmCancel')
 $Root = $win.FindName('Root')
-foreach ($name in @('ToolTabs','DesktopTab','CliTab','ScanBtn','NoToolsText','CliPanel','CliInfo','CliCards','CliLoginBtn','CliOpenBtn','DesktopFooter')) { Set-Variable -Name $name -Value $win.FindName($name) }
+foreach ($name in @('ToolTabs','DesktopTab','CliTab','ScanBtn','NoToolsText','CliPanel','CliInfo','CliCards','CliLoginBtn','CliOpenBtn','DesktopFooter','UsageControls','UsageUpdated','UsageRefreshBtn')) { Set-Variable -Name $name -Value $win.FindName($name) }
 
 function Set-Theme([bool]$dark) {
     $AppState.Dark = $dark
@@ -412,6 +421,7 @@ $CardXaml = @'
       </Border>
     </Grid>
     <TextBlock x:Name="SessText" FontSize="12" Foreground="{DynamicResource SubText}" Margin="2,12,0,0"/>
+    <StackPanel x:Name="UsageSlot" Margin="2,10,2,0"/>
     <Button x:Name="SwitchBtn" Style="{StaticResource Primary}" Margin="0,12,0,0" Visibility="Collapsed"/>
   </StackPanel>
 </Border>
@@ -462,6 +472,7 @@ function New-AccountCard($p) {
     $card.FindName('EmailText').Text = $email
     $n = [int]$p.sessionCount
     $card.FindName('SessText').Text = if ($n -gt 0) { "$n session Claude Code" } else { 'Chưa có session Claude Code' }
+    Add-UsageToCard $card ([string]$p.uuid)
     $edit = $card.FindName('EditBtn'); $edit.Tag = @{ Card = $card; Uuid = [string]$p.uuid }
     $edit.Add_Click({ param($s, $e) Begin-EditLabel $s.Tag.Card $s.Tag.Uuid })
     $le = $card.FindName('LabelEdit'); $le.Tag = @{ Card = $card; Uuid = [string]$p.uuid; Done = $false }
@@ -888,6 +899,7 @@ function Refresh-Status {
         try { if ($job.Exit -eq 0 -and (Test-Path -LiteralPath $job.Out)) { $st = [IO.File]::ReadAllText($job.Out, [Text.Encoding]::UTF8) | ConvertFrom-Json } } catch {}
         if (-not $st) { return }
         $AppState.Status = $st
+        $AppState.Usage = $st.usage
         Update-DetectedTools
         if ($st.tools.desktop -and $st.unsavedCurrent -and -not $AppState.SavedOnce) {
             $AppState.SavedOnce = $true
@@ -906,6 +918,8 @@ function Refresh-Status {
         $AppState.Loading = $false
         $MenuConfirm.Visibility = if ((Get-GuiSettings).skipConfirm) { 'Visible' } else { 'Collapsed' }
         if ($AppState.Mode -eq 'accounts') { Render-Accounts }
+        Update-UsageControls
+        if (-not $NoAppControl -and -not $AppState.Busy -and [DateTimeOffset]::UtcNow -ge $AppState.NextUsageCheck) { Start-UsageRefresh }
         Update-Tray
         if ($AutoSwitch -and -not $AppState.AutoDone -and $st.profiles.Count -ge 2) { $AppState.AutoDone = $true; Start-Switch $AutoSwitch }
         if ($AutoClick -and -not $AppState.AutoDone -and -not $st.unsavedCurrent -and $AppState.TestBtn) {
@@ -1017,6 +1031,16 @@ function Set-PreviewData([string]$state) {
     $a = [pscustomobject]@{ uuid = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'; label = 'Hà An'; email = 'ha.an@example.com'; displayName = 'Hà An'; sessionCount = 65; isActive = $false; hasAuth = $true }
     $b = [pscustomobject]@{ uuid = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'; label = 'Bình Nguyễn'; email = 'binh.nguyen@example.com'; displayName = 'Bình Nguyễn'; sessionCount = 12; isActive = $true; hasAuth = $true }
     $AppState.Status = [pscustomobject]@{ profiles = @($a, $b); activeUuid = $b.uuid; recentActive = 0; loggedIn = $true; pendingAdd = $null; configError = $null; settings = [pscustomobject]@{ syncSessions = $true } }
+    $AppState.Usage = @{ accounts = @{} }
+    foreach ($profile in @($a, $b)) {
+        $AppState.Usage.accounts[$profile.uuid] = [pscustomobject]@{
+            state = 'ok'; updatedAt = [DateTimeOffset]::UtcNow.ToString('o'); message = ''
+            windows = @(
+                [pscustomobject]@{label='5 giờ';usedPercent=$(if($profile.uuid -eq $a.uuid){25}else{62});resetsAt=[DateTimeOffset]::UtcNow.AddHours(2).ToString('o')},
+                [pscustomobject]@{label='7 ngày';usedPercent=$(if($profile.uuid -eq $a.uuid){100}else{48});resetsAt=[DateTimeOffset]::UtcNow.AddDays(3).ToString('o')}
+            )
+        }
+    }
     $AppState.Status | Add-Member tools ([pscustomobject]@{desktop=$true;cli=$true})
     $AppState.Status | Add-Member cli ([pscustomobject]@{installed=$true;loggedIn=$true;activeUuid=$b.uuid;profiles=@($a,$b);authOverrides=@();runningCount=0;pendingLogin=$null})
     if ($state -eq 'cli-only') { $AppState.Status.tools.desktop=$false }
@@ -1055,11 +1079,13 @@ function Set-PreviewData([string]$state) {
 }
 
 . (Join-Path $PSScriptRoot 'ClaudeSwitch.CliUI.ps1')
+. (Join-Path $PSScriptRoot 'ClaudeSwitch.UsageUI.ps1')
 
 # ---------------------------------------------------------------- sự kiện cửa sổ
 $DesktopTab.Add_Click({ Select-ClaudeTool 'desktop' })
 $CliTab.Add_Click({ Select-ClaudeTool 'cli' })
 $ScanBtn.Add_Click({ Refresh-Status })
+$UsageRefreshBtn.Add_Click({ Start-UsageRefresh -Force })
 $CliLoginBtn.Add_Click({
     $pending=$AppState.Status.cli.pendingLogin
     if ($pending.state -eq 'ready') { Start-CliAction 'CliFinishLogin' } else { Start-CliAction 'CliLogin' }
@@ -1181,6 +1207,11 @@ $cliPoll = New-Object Windows.Threading.DispatcherTimer
 $cliPoll.Interval = [TimeSpan]::FromSeconds(5)
 $cliPoll.Add_Tick({ if (-not $AppState.Busy -and ($AppState.ActiveTool -eq 'cli' -or $AppState.Status.cli.pendingLogin)) { Refresh-Status } })
 $cliPoll.Start()
+
+$usagePoll = New-Object Windows.Threading.DispatcherTimer
+$usagePoll.Interval = [TimeSpan]::FromMinutes(2)
+$usagePoll.Add_Tick({ if (-not $AppState.Busy -and -not $NoAppControl) { Start-UsageRefresh } })
+$usagePoll.Start()
 
 $AppState.AddTimer = New-Object Windows.Threading.DispatcherTimer
 $AppState.AddTimer.Interval = [TimeSpan]::FromSeconds(2)

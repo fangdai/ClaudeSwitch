@@ -20,6 +20,7 @@ function Update-DetectedTools {
     $CliTab.Background=if($AppState.ActiveTool -eq 'cli'){Res 'AccentSoft'}else{[Windows.Media.Brushes]::Transparent}
     if (-not $isDesktop) { $PanelProgress.Visibility='Collapsed' }
     Update-SyncButton
+    Update-UsageControls
 }
 
 function Select-ClaudeTool([string]$tool) {
@@ -54,6 +55,7 @@ function Render-CliAccounts {
         $card.FindName('LabelText').Text=$label
         $card.FindName('EmailText').Text=[string]$profile.email
         $card.FindName('SessText').Text='Claude Code CLI'
+        Add-UsageToCard $card ([string]$profile.uuid)
         $card.FindName('EditBtn').Visibility='Collapsed'
         if($profile.isActive){
             $card.FindName('Badge').Visibility='Visible'

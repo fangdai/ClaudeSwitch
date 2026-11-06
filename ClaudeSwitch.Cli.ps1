@@ -154,9 +154,26 @@ function Get-CliPending {
     return @{ id=$id; state=$state; directory=$dir }
 }
 
+# The CLI renews and rotates its own tokens while it runs. Keep the saved copy of the
+# active account current, otherwise a later switch back restores a revoked refresh token.
+function Sync-ActiveCliProfile($current) {
+    if (-not $current.LoggedIn) { return }
+    if (-not (Test-Path -LiteralPath (Join-Path (Get-CliProfileDir $current.Uuid) 'auth.bin'))) { return }
+    $saved = $null
+    try { $saved = Read-CliProfile $current.Uuid } catch {}
+    if ($saved -and (Get-DictString $saved['oauth'] 'refreshToken') -ceq (Get-DictString $current.Oauth 'refreshToken') -and (Get-DictString $saved['oauth'] 'accessToken') -ceq (Get-DictString $current.Oauth 'accessToken')) { return }
+    try {
+        Invoke-CliLocked {
+            $again = Read-CliState
+            if ($again.LoggedIn -and $again.Uuid -ieq $current.Uuid) { Save-CliProfile $again }
+        }
+    } catch {}
+}
+
 function Get-CliStatus {
     $path = [string](Find-CliPath); $current = Read-CliState
     $overrides = @(Get-CliOverrides)
+    if (-not $overrides.Count) { Sync-ActiveCliProfile $current }
     $profiles = New-Object System.Collections.ArrayList
     $root = Join-Path $script:CliRoot 'profiles'
     if (Test-Path -LiteralPath $root) {
@@ -186,6 +203,18 @@ function Invoke-CliSwitch([string]$uuid, [switch]$Force) {
     $target = Read-CliProfile $uuid
     $current = Read-CliState
     if (-not $Force -and $current.LoggedIn -and $current.Uuid -ieq $uuid) { Write-Step 'cli' 'ok' 'CLI đang dùng account này.'; return }
+    # Do not hand the CLI a dead login: it would show the account name but fail or fall back.
+    $expiresAt = $target['oauth']['expiresAt']
+    if (-not $Force -and $expiresAt -and [double]$expiresAt -le [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 60000) {
+        $renewed = $null
+        if (-not $NoAppControl) { try { $renewed = Renew-InactiveUsageAuthentication $uuid } catch {} }
+        if (-not $renewed) {
+            $name = Get-DictString (Read-JsonFile (Join-Path (Get-CliProfileDir $uuid) 'meta.json')) 'label'
+            if (-not $name) { $name = Get-DictString $target['account'] 'emailAddress' }
+            throw ('Đăng nhập CLI đã lưu của ' + $name + ' đã hết hiệu lực. Bấm "Thêm account CLI" và đăng nhập lại account đó. CLI hiện tại chưa bị thay đổi.')
+        }
+        $target = Read-CliProfile $uuid
+    }
     $credentials = Read-CliFileSnapshot $script:CliCredentialsPath
     $config = Read-CliFileSnapshot $CliConfigFile
     # Parse and validate both files before backing up or changing either.
