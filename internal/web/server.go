@@ -47,18 +47,21 @@ type Server struct {
 	Token string
 	URL   string
 
-	mu         sync.Mutex
-	job        *Job
-	jobSeq     int64
-	notice     string
-	noticeSeq  int64
-	usageBusy  bool
-	lastPing   time.Time
-	newLoginAt map[string]time.Time
-	cliSaved   bool
+	mu          sync.Mutex
+	job         *Job
+	jobSeq      int64
+	notice      string
+	noticeSeq   int64
+	usageBusy   bool
+	lastPing    time.Time
+	newLoginAt  map[string]time.Time
+	cliSaved    bool
 	finishTried string
 
 	httpSrv *http.Server
+
+	// OnRaise, when set, brings the existing window to the front (single instance).
+	OnRaise func() bool
 }
 
 // New prepares a server bound to a random local port.
@@ -82,6 +85,10 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	static, _ := fs.Sub(assets, "assets")
 	mux.Handle("/", http.FileServer(http.FS(static)))
 	mux.HandleFunc("/api/ping", s.api(func(r *http.Request) (any, error) { return map[string]bool{"ok": true}, nil }))
+	mux.HandleFunc("/api/raise", s.api(func(r *http.Request) (any, error) {
+		ok := s.OnRaise != nil && s.OnRaise()
+		return map[string]bool{"raised": ok}, nil
+	}))
 	mux.HandleFunc("/api/status", s.api(s.handleStatus))
 	mux.HandleFunc("/api/action", s.api(s.handleAction))
 	s.httpSrv = &http.Server{Handler: s.guard(mux), ReadHeaderTimeout: 5 * time.Second}

@@ -276,7 +276,9 @@ type cliProfile struct {
 	Account map[string]any
 }
 
-func (e *Env) cliProfileDir(uuid string) string { return filepath.Join(e.StoreDir, "cli", "profiles", uuid) }
+func (e *Env) cliProfileDir(uuid string) string {
+	return filepath.Join(e.StoreDir, "cli", "profiles", uuid)
+}
 
 func (e *Env) cliProfileIDs() []string {
 	entries, _ := os.ReadDir(filepath.Join(e.StoreDir, "cli", "profiles"))
@@ -572,7 +574,9 @@ func (e *Env) writeCliBackup(cred, cfg snapshot) error {
 
 // ---- login --------------------------------------------------------------------------------
 
-func (e *Env) pendingLoginPath() string { return filepath.Join(e.StoreDir, "cli", "pending-login.json") }
+func (e *Env) pendingLoginPath() string {
+	return filepath.Join(e.StoreDir, "cli", "pending-login.json")
+}
 
 // CliPending describes an in-progress CLI login.
 type CliPending struct {

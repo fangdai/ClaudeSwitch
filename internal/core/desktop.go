@@ -220,7 +220,9 @@ func (e *Env) readDesktopAuth(uuid string) (*desktopSaved, error) {
 	return out, nil
 }
 
-func (e *Env) claudeJSONAccount() map[string]any { return dict(readJSONMap(e.ClaudeJSON), "oauthAccount") }
+func (e *Env) claudeJSONAccount() map[string]any {
+	return dict(readJSONMap(e.ClaudeJSON), "oauthAccount")
+}
 
 // saveDesktopProfile stores the current Desktop login and refreshes its metadata.
 func (e *Env) saveDesktopProfile(c *desktopConfig) error {
@@ -337,7 +339,7 @@ func setLabel(metaPath, uuid, label string) error {
 // ---- backups -----------------------------------------------------------------------
 
 type desktopBackup struct {
-	dir                     string
+	dir                      string
 	config, cookies, journal bool
 }
 
@@ -560,7 +562,7 @@ func (e *Env) SwitchDesktop(target string, p Progress) (warning string, err erro
 	return warning, nil
 }
 
-func (e *Env) pendingAddPath() string { return filepath.Join(e.StoreDir, "pending-add.json") }
+func (e *Env) pendingAddPath() string     { return filepath.Join(e.StoreDir, "pending-add.json") }
 func (e *Env) pendingAdd() map[string]any { return readJSONMap(e.pendingAddPath()) }
 
 // PrepareAddDesktop saves the current account, then opens Claude at its login screen.

@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -105,7 +106,17 @@ func buildBinary(t target, version, out string) []byte {
 		ldflags += " -H windowsgui"
 	}
 	cmd := exec.Command("go", "build", "-trimpath", "-ldflags", ldflags, "-o", exe, "./cmd/claude-switch")
-	cmd.Env = append(os.Environ(), "GOOS="+t.goos, "GOARCH="+t.goarch, "CGO_ENABLED=0")
+	// The macOS window (WKWebView) needs cgo, which only works when building on a Mac;
+	// elsewhere the macOS build falls back to a browser window.
+	cgo := "0"
+	if t.goos == "darwin" {
+		if runtime.GOOS == "darwin" {
+			cgo = "1"
+		} else {
+			fmt.Fprintln(os.Stderr, "  cảnh báo: build macOS ngoài máy Mac sẽ không có cửa sổ native")
+		}
+	}
+	cmd.Env = append(os.Environ(), "GOOS="+t.goos, "GOARCH="+t.goarch, "CGO_ENABLED="+cgo)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	must(cmd.Run())
 	b, err := os.ReadFile(exe)

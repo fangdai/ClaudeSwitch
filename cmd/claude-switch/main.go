@@ -24,6 +24,7 @@ import (
 	"github.com/fangdai/ClaudeSwitch/internal/core"
 	"github.com/fangdai/ClaudeSwitch/internal/platform"
 	"github.com/fangdai/ClaudeSwitch/internal/web"
+	"github.com/fangdai/ClaudeSwitch/internal/window"
 )
 
 var version = "dev"
@@ -146,15 +147,36 @@ func liveInstance(store string) *instance {
 	return &in
 }
 
-// openWindow shows the UI in a Chromium "app" window (no tabs or address bar), falling
-// back to the default browser. It returns the browser process when it owns one.
-func openWindow(url, store string) *os.Process {
+// raiseExisting brings the running instance's window to the front.
+func raiseExisting(in *instance) bool {
+	platform.AllowForeground(in.PID)
+	req, _ := http.NewRequest("GET", in.URL+"api/raise", nil)
+	req.Header.Set("X-CS-Token", in.Token)
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	var r struct{ Raised bool }
+	return json.NewDecoder(resp.Body).Decode(&r) == nil && r.Raised
+}
+
+// openBrowserWindow is the fallback when the OS has no WebView (Linux, or Windows
+// without the WebView2 runtime): a Chromium "app" window with an isolated, extension-free
+// profile, else the default browser. It returns the browser process when it owns one.
+func openBrowserWindow(url, store string) *os.Process {
 	for _, b := range platform.AppBrowsers() {
 		cmd := exec.Command(b,
 			"--app="+url,
 			"--user-data-dir="+filepath.Join(store, "ui-browser"),
 			"--window-size=500,820",
-			"--no-first-run", "--no-default-browser-check", "--disable-features=Translate",
+			"--disable-extensions",
+			"--disable-component-extensions-with-background-pages",
+			"--disable-sync",
+			"--disable-default-apps",
+			"--disable-background-networking",
+			"--no-first-run", "--no-default-browser-check",
+			"--disable-features=Translate,msEdgeSidebarV2,msHubApps,msImplicitSignin,EdgeCollections,msShoppingExp",
 		)
 		if err := cmd.Start(); err == nil {
 			return cmd.Process
@@ -170,7 +192,9 @@ func runUI(noWindow bool) error {
 		return err
 	}
 	if in := liveInstance(env.StoreDir); in != nil && !noWindow {
-		openWindow(in.URL+"#t="+in.Token, env.StoreDir)
+		if !raiseExisting(in) {
+			openBrowserWindow(in.URL+"#t="+in.Token, env.StoreDir)
+		}
 		return nil
 	}
 	srv, ln, err := web.New(env)
@@ -180,7 +204,6 @@ func runUI(noWindow bool) error {
 	b, _ := json.Marshal(instance{URL: srv.URL, Token: srv.Token, PID: os.Getpid()})
 	_ = os.WriteFile(instancePath(env.StoreDir), b, 0o600)
 	defer os.Remove(instancePath(env.StoreDir))
-	env.Logf("Claude Switch %s khởi động (%s).", version, srv.URL)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -189,10 +212,28 @@ func runUI(noWindow bool) error {
 
 	full := srv.URL + "#t=" + srv.Token
 	if noWindow {
+		env.Logf("Claude Switch %s khởi động (%s, không cửa sổ).", version, srv.URL)
 		fmt.Println(full)
 		return <-done
 	}
-	proc := openWindow(full, env.StoreDir)
+
+	if window.Available() {
+		env.Logf("Claude Switch %s khởi động (cửa sổ WebView hệ thống).", version)
+		srv.OnRaise = window.Raise
+		err := window.Run(window.Options{
+			URL: full, Title: "Claude Switch", Width: 500, Height: 820,
+			DataDir: filepath.Join(env.StoreDir, "webview"),
+		})
+		if err == nil {
+			cancel()
+			return <-done
+		}
+		srv.OnRaise = nil
+		env.Logf("Không mở được cửa sổ WebView (%v), dùng trình duyệt.", err)
+	}
+
+	env.Logf("Claude Switch %s khởi động (cửa sổ trình duyệt).", version)
+	proc := openBrowserWindow(full, env.StoreDir)
 	browserGone := make(chan struct{})
 	if proc != nil {
 		go func() { proc.Wait(); close(browserGone) }()

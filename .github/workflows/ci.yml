@@ -23,7 +23,9 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
-    runs-on: ubuntu-latest
+    # macOS runner: the macOS packages need cgo for the native window; Windows and
+    # Linux packages are cross-compiled without cgo.
+    runs-on: macos-latest
     permissions:
       contents: write
     steps:

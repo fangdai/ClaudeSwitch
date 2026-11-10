@@ -72,6 +72,9 @@ func Hide(cmd *exec.Cmd) {}
 // AttachParentConsole is a no-op outside Windows.
 func AttachParentConsole() {}
 
+// AllowForeground is a no-op outside Windows.
+func AllowForeground(int) {}
+
 // OpenTerminal runs argv in a new terminal window.
 func OpenTerminal(title string, env map[string]string, dir string, argv []string, pauseOnFail bool) (*os.Process, error) {
 	script := "cd " + shellQuote(dir) + " && " + ShellCommand(env, argv)

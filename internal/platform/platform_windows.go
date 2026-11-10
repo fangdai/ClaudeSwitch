@@ -15,7 +15,11 @@ var (
 	kernel32                       = syscall.NewLazyDLL("kernel32.dll")
 	procQueryFullProcessImageNameW = kernel32.NewProc("QueryFullProcessImageNameW")
 	procAttachConsole              = kernel32.NewProc("AttachConsole")
+	procAllowSetForegroundWindow   = syscall.NewLazyDLL("user32.dll").NewProc("AllowSetForegroundWindow")
 )
+
+// AllowForeground lets process pid bring its window to the front.
+func AllowForeground(pid int) { procAllowSetForegroundWindow.Call(uintptr(pid)) }
 
 const (
 	processQueryLimitedInformation = 0x1000

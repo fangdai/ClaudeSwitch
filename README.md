@@ -2,8 +2,9 @@
 
 Chuyển nhanh giữa nhiều account **Claude Desktop** và **Claude Code CLI**, xem usage (giới hạn 5 giờ / 7 ngày) của từng account. Chạy trên **Windows, macOS và Linux**: một file duy nhất (~8 MB), không cần cài Node, Python hay .NET.
 
-- Viết bằng Go, chỉ dùng thư viện chuẩn. Mở trong khoảng 0,2 giây.
-- Giao diện mở trong cửa sổ riêng của Edge/Chrome ở dạng ứng dụng, không có thanh địa chỉ. Máy không có các trình duyệt này thì giao diện mở bằng trình duyệt mặc định.
+- Viết bằng Go. Mở trong khoảng 0,2 giây, dùng khoảng 30 MB RAM.
+- Cửa sổ ứng dụng thật, dùng WebView có sẵn của hệ điều hành: **WebView2** trên Windows 10/11, **WKWebView** trên macOS. Không mở trình duyệt, nên không có profile, tiện ích mở rộng, đồng bộ hay thanh địa chỉ. Mở lại khi cửa sổ đang mở thì cửa sổ cũ được đưa lên trước. Đóng cửa sổ là thoát hẳn.
+- Linux (hoặc Windows thiếu WebView2 Runtime): giao diện mở trong cửa sổ Chrome/Edge dạng ứng dụng, dùng profile riêng và tắt tiện ích mở rộng.
 - Dữ liệu đăng nhập được mã hóa theo tài khoản người dùng của máy. Token không bao giờ được ghi vào log hay hiện ra màn hình.
 
 ## Tải về
@@ -135,7 +136,7 @@ Gỡ cài đặt: `claude-switch uninstall`. Mặc định account đã lưu v�
 
 ## Cho người phát triển
 
-Cần Go 1.24 trở lên.
+Cần Go 1.26 trở lên. Bản macOS phải build trên máy Mac (cần cgo cho WKWebView); build ở nơi khác thì bản macOS dùng cửa sổ trình duyệt thay thế.
 
 ```bash
 go test ./...
@@ -149,7 +150,7 @@ go run ./cmd/claude-switch
 go run ./tools/release -version 2.0.0
 ```
 
-Lệnh cuối build và đóng gói cả 6 bản vào `dist/` từ bất kỳ máy nào, không cần cgo. Đẩy tag `v*` lên GitHub thì workflow `.github/workflows/ci.yml` tự chạy test trên Windows, macOS, Linux và tạo Release kèm các gói.
+Lệnh cuối build và đóng gói cả 6 bản vào `dist/`. Đẩy tag `v*` lên GitHub thì workflow `.github/workflows/ci.yml` tự chạy test trên Windows, macOS, Linux, rồi build trên máy macOS và tạo Release kèm các gói.
 
 Cấu trúc:
 
@@ -157,6 +158,7 @@ Cấu trúc:
 cmd/claude-switch/   điểm vào, dòng lệnh, mở cửa sổ, cài shortcut
 internal/core/       Claude Desktop, Claude CLI, usage, sao lưu/khôi phục (có test)
 internal/web/        máy chủ giao diện 127.0.0.1 (có token) + HTML/CSS/JS nhúng sẵn
+internal/window/     cửa sổ native: WebView2 (Windows), WKWebView (macOS)
 internal/secure/     mã hóa account đã lưu theo từng hệ điều hành
 internal/platform/   tiến trình, terminal, Keychain, trình duyệt theo từng hệ điều hành
 tools/release/       build và đóng gói
