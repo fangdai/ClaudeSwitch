@@ -20,9 +20,9 @@ function Get-UsageAccountIds {
     return @($ids.Keys | Sort-Object)
 }
 
-function Get-UsageAuthentication([string]$uuid) {
-    $current = Read-CliState
-    if ($current.LoggedIn -and $current.Uuid -ieq $uuid) { return @{ oauth = $current.Oauth; active = $true } }
+function Get-UsageAuthentication([string]$uuid, $current = $null) {
+    if (-not $current) { $current = Get-CliLiveState }
+    if ($current.Verified -and $current.Uuid -ieq $uuid) { return @{ oauth = $current.Oauth; active = $true } }
     try {
         $profile = Read-CliProfile $uuid
         return @{ oauth = $profile['oauth']; active = $false }
@@ -64,9 +64,10 @@ function Request-UsageHttp([string]$url, [string]$token, $body = $null) {
 
 function Renew-InactiveUsageAuthentication([string]$uuid) {
     # Refresh only an inactive CLI profile. The normal CLI owns renewal of its active login.
+    $script:LastRenewStatus = 0
     $result = Invoke-CliLocked {
-        $current = Read-CliState
-        if ($current.LoggedIn -and $current.Uuid -ieq $uuid) { return $null }
+        $current = Get-CliLiveState
+        if ($current.Verified -and $current.Uuid -ieq $uuid) { return $null }
         $profile = Read-CliProfile $uuid
         $oauth = $profile['oauth']
         $expiresAt = $oauth['expiresAt']
@@ -77,6 +78,7 @@ function Renew-InactiveUsageAuthentication([string]$uuid) {
             client_id = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
         }
         Write-Log ('Usage: làm mới đăng nhập CLI {0}, HTTP {1}.' -f $uuid, $reply.status)
+        $script:LastRenewStatus = [int]$reply.status
         $data = $reply.body
         if ($reply.status -ne 200 -or -not (Get-DictString $data 'access_token') -or -not (Test-DictHas $data 'expires_in')) { return $null }
         $renewed = @{}
@@ -87,7 +89,7 @@ function Renew-InactiveUsageAuthentication([string]$uuid) {
         $renewed['expiresAt'] = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + [double]$data['expires_in'] * 1000
         $scope = Get-DictString $data 'scope'
         if ($scope) { $renewed['scopes'] = @($scope -split ' ') }
-        $state = @{ LoggedIn = $true; Uuid = [string]$uuid; Oauth = $renewed; Account = $profile['account'] }
+        $state = @{ LoggedIn = $true; Verified = $true; Uuid = [string]$uuid; Oauth = $renewed; Account = $profile['account'] }
         $state = $script:Ser.DeserializeObject(($state | ConvertTo-Json -Depth 20 -Compress))
         Save-CliProfile $state
         return $renewed
@@ -162,18 +164,22 @@ function Use-DesktopUsageFallback([string]$uuid, $record) {
     return $record
 }
 
-function Update-AccountUsage([string]$uuid, $previous, [bool]$force) {
+function Update-AccountUsage([string]$uuid, $previous, [bool]$force, $live = $null) {
     $now = [DateTimeOffset]::UtcNow
-    $auth = Get-UsageAuthentication $uuid
+    $auth = Get-UsageAuthentication $uuid $live
     $fingerprint = Get-UsageAuthFingerprint $auth
     $sameAuth = $previous -and (Get-DictString $previous 'authFingerprint') -ceq $fingerprint
     if ($sameAuth -and (Read-UsageDate $previous['retryAt']) -gt $now) { return (Use-DesktopUsageFallback $uuid $previous) }
-    $maxAgeSeconds = if ($force) { 15 } else { 120 }
+    $maxAgeSeconds = if ($force) { 60 } else { 120 }
     if ($sameAuth -and (Read-UsageDate $previous['checkedAt']) -gt $now.AddSeconds(-$maxAgeSeconds)) { return (Use-DesktopUsageFallback $uuid $previous) }
     $record = @{ state = 'unavailable'; checkedAt = $now.ToString('o'); updatedAt = $null; authFingerprint = $fingerprint; windows = @(); message = ''; retryAt = $null }
     if ($previous) { $record.updatedAt = $previous['updatedAt']; $record.windows = $previous['windows'] }
     if (-not $auth) {
         $record.state = 'missing_login'; $record.message = 'Đăng nhập account này trong mục CLI để xem usage.'
+        $removed = Get-DictString (Read-JsonFile (Join-Path (Get-CliProfileDir $uuid) 'meta.json')) 'authRemovedReason'
+        if ($removed) { $record.message = $removed }
+        # Never keep showing numbers that may belong to another account.
+        if ($removed) { $record.windows = @(); $record.updatedAt = $null }
         return (Use-DesktopUsageFallback $uuid $record)
     }
     $oauth = $auth.oauth
@@ -181,6 +187,17 @@ function Update-AccountUsage([string]$uuid, $previous, [bool]$force) {
     if ($expired -and -not $auth.active) {
         try { $renewed = Renew-InactiveUsageAuthentication $uuid } catch { $renewed = $null }
         if ($renewed) { $oauth = $renewed; $record.authFingerprint = Get-UsageAuthFingerprint @{ oauth = $oauth } }
+        elseif ($script:LastRenewStatus -in @(400, 401)) {
+            $record.state = 'login_expired'; $record.message = 'Đăng nhập CLI đã lưu của account này đã bị thu hồi. Đăng nhập lại account này trong mục CLI.'; $record.retryAt = $now.AddHours(6).ToString('o')
+            return (Use-DesktopUsageFallback $uuid $record)
+        }
+    }
+    # A token saved under this account must really belong to it, otherwise two cards show one account's quota.
+    $owner = Resolve-CliTokenOwner $oauth $uuid -SkipSavedProfiles
+    if ($owner -and $owner -ine $uuid) {
+        $record.state = 'wrong_account'; $record.windows = @(); $record.updatedAt = $null
+        $record.message = 'Đăng nhập đã lưu thuộc account khác. Đăng nhập lại account này trong mục CLI.'
+        return $record
     }
     if ($oauth['expiresAt'] -and [double]$oauth['expiresAt'] -le $now.ToUnixTimeMilliseconds()) {
         $record.state = 'login_expired'; $record.message = 'Đăng nhập CLI đã hết hạn. Mở CLI hoặc đăng nhập lại để cập nhật.'; $record.retryAt = $now.AddMinutes(10).ToString('o')
@@ -201,6 +218,39 @@ function Update-AccountUsage([string]$uuid, $previous, [bool]$force) {
     return (Use-DesktopUsageFallback $uuid $record)
 }
 
+# Saved CLI profiles written before token-owner checks existed may hold another account's
+# login (Desktop-embedded Claude Code rewrites ~/.claude.json). Move such copies aside.
+function Repair-CliProfileOwners {
+    $root = Join-Path $script:CliRoot 'profiles'
+    if (-not (Test-Path -LiteralPath $root)) { return }
+    foreach ($dir in Get-ChildItem -LiteralPath $root -Directory) {
+        if ($dir.Name -notmatch $script:GuidRx) { continue }
+        $auth = Join-Path $dir.FullName 'auth.bin'
+        if (-not (Test-Path -LiteralPath $auth)) { continue }
+        try { $saved = Read-CliProfile $dir.Name } catch { continue }
+        $owner = Resolve-CliTokenOwner $saved['oauth'] $dir.Name -SkipSavedProfiles
+        if (-not $owner -or $owner -ieq $dir.Name) { continue }
+        Invoke-CliLocked {
+            # Keep the login for its real owner when it is newer than that owner's saved copy.
+            $ownerSaved = $null
+            try { $ownerSaved = Read-CliProfile $owner } catch {}
+            $ownerExpires = if ($ownerSaved -and $ownerSaved['oauth']['expiresAt']) { [double]$ownerSaved['oauth']['expiresAt'] } else { 0 }
+            $wrongExpires = if ($saved['oauth']['expiresAt']) { [double]$saved['oauth']['expiresAt'] } else { 0 }
+            if ($ownerSaved -and $wrongExpires -gt $ownerExpires) {
+                Save-CliProfile @{ LoggedIn = $true; Verified = $true; Uuid = $owner; Oauth = $saved['oauth']; Account = $ownerSaved['account'] }
+            }
+            $aside =Join-Path $dir.FullName ('auth.wrong-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.bin')
+            Move-Item -LiteralPath $auth -Destination $aside
+            $metaPath = Join-Path $dir.FullName 'meta.json'
+            $meta = Read-JsonFile $metaPath
+            if (-not $meta) { $meta = @{} }
+            $meta['authRemovedReason'] = 'Đăng nhập đã lưu bị lẫn sang account khác nên đã được gỡ. Đăng nhập lại account này trong mục CLI.'
+            Write-JsonFile $metaPath $meta
+        }
+        Write-Log ('CLI: profile {0} chứa đăng nhập của {1}; đã chuyển sang file .wrong.' -f $dir.Name, $owner)
+    }
+}
+
 function Invoke-RefreshUsage([bool]$force = $false) {
     $lockName = 'Local\ClaudeSwitch.Usage.' + (Get-Sha256Bytes $script:Utf8NoBom.GetBytes($StoreDir.ToLowerInvariant())).Substring(0,16)
     $mutex = New-Object Threading.Mutex($false, $lockName)
@@ -210,9 +260,12 @@ function Invoke-RefreshUsage([bool]$force = $false) {
         if (-not $held) { return (Read-UsageCache) }
         $cache = Read-UsageCache
         if (-not $NoAppControl) {
+            try { Repair-CliProfileOwners } catch { Write-Log ('Usage: kiểm tra account CLI lỗi: ' + $_.Exception.Message) }
+            $live = Get-CliLiveState
+            if ($live.Verified) { Sync-ActiveCliProfile $live }
             foreach ($uuid in @(Get-UsageAccountIds)) {
                 $previous = if (Test-DictHas $cache['accounts'] $uuid) { $cache['accounts'][$uuid] } else { $null }
-                try { $cache['accounts'][$uuid] = Update-AccountUsage $uuid $previous $force }
+                try { $cache['accounts'][$uuid] = Update-AccountUsage $uuid $previous $force $live }
                 catch { $cache['accounts'][$uuid] = @{ state = 'unavailable'; checkedAt = [DateTimeOffset]::UtcNow.ToString('o'); updatedAt = $null; windows = @(); message = 'Chưa đọc được usage của account này.' } }
             }
             $cache = $script:Ser.DeserializeObject(($cache | ConvertTo-Json -Depth 20 -Compress))

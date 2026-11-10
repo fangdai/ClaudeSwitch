@@ -33,9 +33,9 @@ function Set-FakeCliAccount([string]$uuid, [bool]$expired) {
     Write-JsonFile $CliConfigFile @{oauthAccount=@{accountUuid=$uuid;emailAddress=($uuid.Substring(0,1)+'@example.test')}}
 }
 Set-FakeCliAccount $accountA $true
-Save-CliProfile (Read-CliState)
+Save-CliProfile (Get-CliLiveState)
 Set-FakeCliAccount $accountB $false
-Save-CliProfile (Read-CliState)
+Save-CliProfile (Get-CliLiveState)
 Write-JsonFile (Join-Path (Get-ProfileDir $accountA) 'meta.json') @{orgUuid=$orgA;label='A'}
 Write-JsonFile (Join-Path (Get-ProfileDir $accountB) 'meta.json') @{orgUuid=$orgB;label='B'}
 $script:usageCalls = 0
@@ -91,6 +91,58 @@ $cache.accounts[$accountB] = $recordB
 Write-JsonFile $script:UsageCachePath $cache
 $cachedText = [IO.File]::ReadAllText($script:UsageCachePath)
 Check (-not ($cachedText -match 'FAKE-ACCESS|FAKE-REFRESH|refreshToken|accessToken')) 'Usage cache contains no authentication secrets'
+
+# ---- Token owner verification: Claude Desktop's embedded Claude Code rewrites oauthAccount
+# in ~/.claude.json while .credentials.json keeps the CLI login of the other account.
+$script:CliVerifyOwner = $true
+$script:owners = @{}
+function Request-UsageHttp([string]$url, [string]$token, $body=$null) {
+    if ($url -eq 'https://api.anthropic.com/api/oauth/profile') {
+        $script:profileCalls++
+        if ($script:owners.ContainsKey($token)) { return @{status=200;body=@{account=@{uuid=$script:owners[$token]}};retrySeconds=300} }
+        return @{status=401;body=$null;retrySeconds=300}
+    }
+    if ($url -eq 'https://platform.claude.com/v1/oauth/token') { return @{status=400;body=$null;retrySeconds=300} }
+    $script:usageCalls++
+    return @{status=200;body=@{five_hour=@{utilization=($script:owners[$token] -eq $accountB) * 50.0;resets_at=$null}};retrySeconds=300}
+}
+$script:profileCalls = 0
+$future = [DateTimeOffset]::UtcNow.AddHours(8).ToUnixTimeMilliseconds()
+$rotatedB = @{accessToken='FAKE-ACCESS-B-ROTATED';refreshToken='FAKE-REFRESH-B-ROTATED';expiresAt=$future}
+$script:owners['FAKE-ACCESS-B-ROTATED'] = $accountB
+$script:owners['FAKE-ACCESS-RENEWED'] = $accountA
+Write-JsonFile $script:CliCredentialsPath @{claudeAiOauth=$rotatedB}
+Write-JsonFile $CliConfigFile @{oauthAccount=@{accountUuid=$accountA;emailAddress='a@example.test'}}
+$profileAHash = Get-Sha256File (Join-Path (Get-CliProfileDir $accountA) 'auth.bin')
+$live = Get-CliLiveState
+Check ($live.Verified -and $live.Uuid -eq $accountB -and $live.Mismatch -and (Get-DictString $live.Account 'accountUuid') -eq $accountB) 'Live login is attributed to the token owner, not to the rewritten config claim'
+Sync-ActiveCliProfile $live
+Check ((Read-CliProfile $accountB)['oauth']['accessToken'] -eq 'FAKE-ACCESS-B-ROTATED' -and (Get-Sha256File (Join-Path (Get-CliProfileDir $accountA) 'auth.bin')) -eq $profileAHash) 'Rotated token is saved under its real owner and never overwrites the claimed account'
+$calls = $script:profileCalls
+[void](Get-CliLiveState)
+Check ($script:profileCalls -eq $calls) 'Verified token owners are cached by hash without repeated network checks'
+Check (-not ([IO.File]::ReadAllText($script:CliIdentityPath) -match 'FAKE-')) 'Identity cache stores only token hashes'
+$status = Get-CliStatus
+Check ($status.activeUuid -eq $accountB -and $status.identityMismatch -and -not $status.unsavedCurrent) 'CLI status reports the real active account and the config mismatch'
+$threw = $false
+try { Save-CliProfile @{LoggedIn=$true;Verified=$false;Uuid=$accountA;Oauth=$rotatedB;Account=@{accountUuid=$accountA}} } catch { $threw = $true }
+Check $threw 'Unverified logins are never saved'
+$unknownLive = @{accessToken='FAKE-ACCESS-UNKNOWN';refreshToken='FAKE-REFRESH-UNKNOWN';expiresAt=$future}
+Write-JsonFile $script:CliCredentialsPath @{claudeAiOauth=$unknownLive}
+$unknownState = Get-CliLiveState
+Check (-not $unknownState.Verified -and (Get-CliStatus).unverified -and -not (Get-CliStatus).activeUuid) 'Unprovable live login is not shown as any saved account'
+# Simulate a profile corrupted by the old behaviour: account A holding B's login.
+$payload = @{version=1;uuid=$accountA;oauth=$rotatedB;account=@{accountUuid=$accountA;emailAddress='a@example.test'}}
+$plain = $script:Utf8NoBom.GetBytes($script:Ser.Serialize($payload))
+Write-FileAtomic (Join-Path (Get-CliProfileDir $accountA) 'auth.bin') ([Security.Cryptography.ProtectedData]::Protect($plain,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))
+$poisoned = Update-AccountUsage $accountA $null $true $unknownState
+Check ($poisoned.state -eq 'wrong_account' -and @($poisoned.windows).Count -eq 0) 'Usage is not shown for a profile whose token belongs to another account'
+Repair-CliProfileOwners
+Check (-not (Test-Path (Join-Path (Get-CliProfileDir $accountA) 'auth.bin')) -and @(Get-ChildItem (Get-CliProfileDir $accountA) -Filter 'auth.wrong-*.bin').Count -eq 1) 'Mixed-up profile is moved aside instead of deleted'
+Check ((Read-CliProfile $accountB)['oauth']['accessToken'] -eq 'FAKE-ACCESS-B-ROTATED') 'Real owner keeps its login after repair'
+$afterRepair = Update-AccountUsage $accountA $recordA $true $unknownState
+Check ($afterRepair.state -eq 'missing_login' -and @($afterRepair.windows).Count -eq 0 -and $afterRepair.message -match 'lẫn') 'Repaired account asks for a new login and drops borrowed numbers'
+$script:CliVerifyOwner = $false
 
 if ($VerifyGui) {
     & {

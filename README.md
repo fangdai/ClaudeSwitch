@@ -1,71 +1,163 @@
 # Claude Switch
 
-Chuyển account **Claude Desktop và Claude Code CLI** trên Windows. Công cụ tự nhận diện phần đã cài và chỉ hiện mục tương ứng. Hai phần có danh sách account riêng; phần Desktop vẫn đồng bộ session giữa hai account. Không cần cài thêm thư viện (Windows PowerShell 5.1 có sẵn).
+Chuyển nhanh giữa nhiều account **Claude Desktop** và **Claude Code CLI**, xem usage (giới hạn 5 giờ / 7 ngày) của từng account. Chạy trên **Windows, macOS và Linux**: một file duy nhất (~8 MB), không cần cài Node, Python hay .NET.
 
-## Claude CLI
+- Viết bằng Go, chỉ dùng thư viện chuẩn. Mở trong khoảng 0,2 giây.
+- Giao diện mở trong cửa sổ riêng của Edge/Chrome ở dạng ứng dụng, không có thanh địa chỉ. Máy không có các trình duyệt này thì giao diện mở bằng trình duyệt mặc định.
+- Dữ liệu đăng nhập được mã hóa theo tài khoản người dùng của máy. Token không bao giờ được ghi vào log hay hiện ra màn hình.
 
-1. Mở mục **CLI**. Nếu vừa cài Claude CLI khi công cụ đang mở, bấm **Quét lại**.
-2. Account CLI đã đăng nhập được lưu tự động. Nếu chưa đăng nhập, bấm **Đăng nhập CLI**; công cụ mở `claude auth login --claudeai` trong cửa sổ riêng. Bạn tự đăng nhập trong trình duyệt hoặc nhập mã vào cửa sổ CLI nếu được yêu cầu.
-3. Bấm **Thêm account CLI** để đăng nhập account khác. Đăng nhập mới dùng thư mục riêng và không đăng xuất account hiện tại.
-4. Thoát các phiên Claude CLI đang chạy rồi bấm **Chuyển CLI sang ...**. Mở một phiên CLI mới bằng lệnh `claude` hoặc nút **Mở Claude CLI** để dùng account đã chọn.
+## Tải về
 
-Chỉ thay thông tin OAuth và account tương ứng trong cấu hình CLI; giữ nguyên settings, lịch sử, dự án và đăng nhập MCP khác. Công cụ không tự đóng các phiên CLI đang chạy. Nếu CLI dùng API key, token qua biến môi trường hoặc nhà cung cấp bên ngoài, giao diện giải thích cấu hình đang ghi đè và không giả vờ chuyển account OAuth.
+Vào trang **Releases** của repo và tải gói đúng máy:
 
-Account CLI được lưu bằng DPAPI trong `cli\profiles\<id>\auth.bin`. Trước khi chuyển, hai file cấu hình được sao lưu mã hóa trong `cli\backups`; lỗi khi ghi sẽ khôi phục cả hai. Tài khoản Desktop không tự trở thành đăng nhập CLI: cần đăng nhập CLI một lần cho mỗi account.
+| Máy | File |
+|---|---|
+| Windows 10/11 (Intel/AMD) | `ClaudeSwitch-<phiên bản>-windows-x64.zip` |
+| Windows trên ARM | `ClaudeSwitch-<phiên bản>-windows-arm64.zip` |
+| macOS chip Apple (M1–M4…) | `ClaudeSwitch-<phiên bản>-macos-apple-silicon.zip` |
+| macOS chip Intel | `ClaudeSwitch-<phiên bản>-macos-intel.zip` |
+| Linux x64 | `ClaudeSwitch-<phiên bản>-linux-x64.tar.gz` |
+| Linux ARM64 | `ClaudeSwitch-<phiên bản>-linux-arm64.tar.gz` |
 
-Tham khảo [đăng nhập Claude Code](https://code.claude.com/docs/en/authentication) và [lệnh CLI](https://code.claude.com/docs/en/cli-reference).
-
-## Xem usage của các account
-
-Mỗi thẻ account trong mục Desktop và CLI có mức **đã dùng** của cửa sổ 5 giờ, 7 ngày và thời gian reset khi máy chủ cung cấp. Bấm **Cập nhật usage** để kiểm tra cả các account đã lưu. Công cụ dùng chung kết quả theo mã account và tự cập nhật khoảng 2 phút một lần.
-
-Usage trực tiếp sử dụng đăng nhập CLI của account tương ứng. Token của account CLI chưa được chọn được làm mới khi dịch vụ cho phép. Nếu đăng nhập hết hiệu lực, thẻ account hiển thị thông báo hoặc dữ liệu Desktop đã ghi nhận theo đúng organization, kèm thời điểm quan sát. Dòng **Dữ liệu lưu lúc** và thông báo nguồn Desktop xác định kết quả từ cache. Đăng nhập lại account đó ở mục CLI để cập nhật trực tiếp.
-
-Khi máy chủ giới hạn lượt kiểm tra, công cụ đợi theo thời gian thử lại và giữ kết quả gần nhất.
+`SHA256SUMS.txt` có mã kiểm tra của từng gói.
 
 ## Cài đặt
 
-1. Bấm đúp **`Cai dat.bat`**.
-2. Một shortcut **Claude Switch** xuất hiện trên Desktop. Phím tắt mở nhanh: **Ctrl + Alt + C**.
+### Windows
 
-Gỡ cài đặt: bấm đúp `Go cai dat.bat` (mặc định giữ lại các account đã lưu).
+1. Giải nén file zip.
+2. Bấm đúp **`Cai dat.cmd`**. Công cụ chép ứng dụng vào `%LOCALAPPDATA%\ClaudeSwitch\app`, tạo shortcut **Claude Switch** trên Desktop và Start Menu, rồi mở ứng dụng.
+3. Phím tắt mở nhanh: **Ctrl + Alt + C**.
 
-## Dùng lần đầu
+Không cần quyền admin. Nếu muốn dùng mà không cài, chỉ cần bấm đúp `claude-switch.exe`.
 
-1. Mở Claude và đăng nhập account thứ nhất, rồi mở Claude Switch. Account này được lưu tự động.
-2. Bấm **Thêm account thứ hai**. Claude sẽ đóng rồi mở lại ở màn hình đăng nhập, bạn đăng nhập account còn lại. Claude Switch tự nhận ra và lưu lại. Việc này **không** đăng xuất trên máy chủ nên không làm mất đăng nhập đã lưu.
-3. Từ giờ bấm **Chuyển sang ...** là xong. Nếu đổi ý giữa chừng, bấm **Hủy, quay lại account cũ**.
+> Nâng cấp từ bản PowerShell cũ: account đã lưu được dùng tiếp ngay, không cần đăng nhập lại. Chạy `Cai dat.cmd` để shortcut cũ trỏ sang bản mới.
 
-## Lưu ý quan trọng
+### macOS
 
-- Khi chuyển, Claude **đóng và mở lại**. Việc đang chạy (kể cả session Claude Code đang làm dở) sẽ bị dừng. Hãy chuyển lúc rảnh.
-- **Đừng chạy Claude Switch từ bên trong một session Claude Code của chính Claude Desktop**: đóng Claude sẽ tắt luôn session đó.
-- Đóng cửa sổ chỉ thu xuống khay hệ thống (góc phải thanh tác vụ). Chuột phải vào biểu tượng để chuyển nhanh hoặc **Thoát**.
-- Công tắc **Hiện session ở cả 2 account** sao chép (nguyên văn, không sửa) file thông tin session sang account kia. Session nào bạn đã xóa sẽ không bị tạo lại. Menu **...** có **Gỡ session đã sao chép** (chỉ gỡ bản chưa bị sửa).
+1. Giải nén file zip, kéo **Claude Switch.app** vào thư mục **Applications**.
+2. Lần đầu mở: **chuột phải → Open → Open**. Ứng dụng chưa được Apple ký nên macOS hỏi lại một lần. Nếu macOS báo app "bị hỏng", chạy lệnh dưới đây rồi mở lại:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Claude Switch.app"
+```
+
+3. Lần đầu lưu account, macOS có thể hỏi quyền truy cập **Keychain**: bấm **Always Allow**.
+
+Muốn dùng lệnh `claude-switch` trong Terminal:
+
+```bash
+"/Applications/Claude Switch.app/Contents/MacOS/claude-switch" install
+```
+
+### Linux
+
+```bash
+tar -xzf ClaudeSwitch-*-linux-x64.tar.gz
+```
+
+```bash
+./claude-switch/install.sh
+```
+
+Lệnh trên chép file vào `~/.local/bin/claude-switch` và thêm **Claude Switch** vào menu ứng dụng. Claude Desktop chưa có bản chính thức cho Linux, nên trên Linux công cụ dùng cho Claude Code CLI và xem usage.
+
+## Sử dụng
+
+### Claude Desktop (Windows, macOS)
+
+1. Mở Claude, đăng nhập account thứ nhất, rồi mở Claude Switch. Account này được **lưu tự động**.
+2. Bấm **Thêm account thứ hai**. Claude đóng rồi mở lại ở màn hình đăng nhập; bạn đăng nhập account còn lại. Claude Switch tự nhận ra và lưu account đó. Việc này **không** đăng xuất trên máy chủ, nên đăng nhập đã lưu vẫn dùng được.
+3. Từ đó về sau chỉ cần bấm **Chuyển sang …**. Nếu đổi ý giữa chừng, bấm **Hủy, quay lại account cũ**.
+
+Lưu ý:
+- Khi chuyển, Claude sẽ **đóng và mở lại**. Việc đang chạy trong Claude (kể cả session Claude Code) bị dừng, nên hãy chuyển lúc rảnh. Có session vừa hoạt động thì công cụ cảnh báo trước.
+- **Đừng chạy Claude Switch từ bên trong một session Claude Code của Claude Desktop**: đóng Claude sẽ tắt luôn session đó.
+- Menu **⋯** có:
+  - **Hiện session ở mọi account**: sao chép nguyên văn session Claude Code sang account kia. Session bạn đã xóa sẽ không bị tạo lại.
+  - **Gỡ session đã sao chép**: chỉ gỡ những bản chưa bị sửa.
+  - Mở thư mục sao lưu và mở nhật ký.
+
+### Claude Code CLI (Windows, macOS, Linux)
+
+1. Mở tab **CLI**. Account CLI đang đăng nhập được lưu tự động.
+2. Bấm **Thêm account CLI**. Một cửa sổ terminal mở `claude auth login`, đăng nhập vào thư mục riêng nên account hiện tại không bị đăng xuất. Đăng nhập xong, account mới tự được lưu và chọn.
+3. Thoát các phiên `claude` đang chạy, rồi bấm **Chuyển CLI sang …**. Mở phiên mới bằng lệnh `claude` hoặc nút **Mở Claude CLI**.
+
+Công cụ chỉ thay thông tin đăng nhập OAuth của CLI. Settings, lịch sử, dự án và đăng nhập MCP khác được giữ nguyên.
+
+Công cụ không chuyển và giải thích lý do khi CLI dùng:
+- biến môi trường `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`…;
+- `apiKeyHelper`;
+- Bedrock, Vertex hoặc Foundry.
+
+**Về lỗi "2 account cùng usage":** các phiên Claude Code chạy bên trong Claude Desktop dùng chung file `~/.claude.json` với CLI, và có thể ghi tên account Desktop vào đó. Claude Switch xác định account CLI bằng **chính token**: so mã băm đã biết, hoặc hỏi máy chủ một lần. Tên trong file cấu hình không được tin. Nếu một profile lưu nhầm token của account khác, nó được chuyển sang file `auth.wrong-*.bin` (không xóa) và account đó hiện **Cần đăng nhập lại**.
+
+### Usage
+
+Mỗi thẻ account hiện phần trăm **đã dùng** của cửa sổ 5 giờ, 7 ngày (và theo model nếu có), kèm giờ reset. Công cụ tự cập nhật khoảng 3 phút một lần khi cửa sổ đang mở. Bấm **Cập nhật usage** để lấy ngay; mỗi account được kiểm tra tối đa 1 lần mỗi phút.
+
+- Usage lấy trực tiếp bằng đăng nhập CLI của account đó. Token của account chưa được chọn sẽ tự làm mới khi cần.
+- Nếu không lấy trực tiếp được, thẻ hiện số liệu Claude Desktop đã ghi nhận cho đúng organization, có dòng **Dữ liệu lưu lúc …**.
+- Khi máy chủ giới hạn lượt kiểm tra, công cụ đợi đúng thời gian máy chủ yêu cầu rồi mới thử lại.
+
+### Dòng lệnh
+
+```
+claude-switch                      mở cửa sổ ứng dụng
+claude-switch status               in trạng thái (JSON)
+claude-switch switch <account>     chuyển Claude Desktop (tên, email hoặc mã)
+claude-switch cli-switch <account> chuyển Claude Code CLI
+claude-switch usage [--force]      cập nhật và in usage
+claude-switch install              tạo shortcut / mục trong menu ứng dụng
+claude-switch uninstall [--purge]  gỡ shortcut (--purge xóa cả account đã lưu)
+```
 
 ## Dữ liệu nằm ở đâu
 
-`%LOCALAPPDATA%\ClaudeSwitch`
+| Hệ điều hành | Thư mục | Mã hóa account đã lưu |
+|---|---|---|
+| Windows | `%LOCALAPPDATA%\ClaudeSwitch` | DPAPI của tài khoản Windows |
+| macOS | `~/Library/Application Support/ClaudeSwitch` | AES-256-GCM, khóa trong Keychain |
+| Linux | `~/.local/share/ClaudeSwitch` | AES-256-GCM, khóa trong file `.profile-key` (quyền 0600) |
 
-| Thư mục / file | Nội dung |
+| Trong thư mục | Nội dung |
 |---|---|
-| `profiles\<id>\auth.bin` | Đăng nhập + cookie, **mã hóa DPAPI** (chỉ tài khoản Windows này đọc được) |
-| `profiles\<id>\meta.json` | Tên, email (không có bí mật) |
-| `backups\` | 10 bản sao lưu config/cookie gần nhất trước mỗi lần chuyển (menu **...** > Mở thư mục sao lưu) |
-| `logs\` | Nhật ký các bước (không ghi token) |
+| `profiles/<id>/` | Account Desktop: `auth.bin` (đã mã hóa), `meta.json` (tên, email; không có bí mật) |
+| `cli/profiles/<id>/` | Account CLI, cùng cách lưu |
+| `backups/`, `cli/backups/` | 10–20 bản sao lưu gần nhất trước mỗi lần chuyển |
+| `usage.json` | Usage đã lưu (không chứa token) |
+| `logs/` | Nhật ký các bước (không chứa token) |
 
-Nếu có lỗi sau khi sao lưu, công cụ tự khôi phục lại cấu hình cũ và mở lại Claude.
+Nếu có lỗi sau bước sao lưu, công cụ tự khôi phục cấu hình cũ và mở lại Claude.
 
-## Cho người kiểm thử
+Gỡ cài đặt: `claude-switch uninstall`. Mặc định account đã lưu vẫn được giữ lại; thêm `--purge` để xóa hết.
 
-`Tests\Run-Tests.ps1` chạy toàn bộ bài kiểm tra trên **dữ liệu giả** (`-NoAppControl`, không đụng Claude thật):
+## Cho người phát triển
+
+Cần Go 1.24 trở lên.
+
+```bash
+go test ./...
+```
+
+```bash
+go run ./cmd/claude-switch
+```
+
+```bash
+go run ./tools/release -version 2.0.0
+```
+
+Lệnh cuối build và đóng gói cả 6 bản vào `dist/` từ bất kỳ máy nào, không cần cgo. Đẩy tag `v*` lên GitHub thì workflow `.github/workflows/ci.yml` tự chạy test trên Windows, macOS, Linux và tạo Release kèm các gói.
+
+Cấu trúc:
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File Tests\Run-Tests.ps1 -Scratch <thư mục tạm>
-```
-
-Kiểm tra CLI bằng dữ liệu giả, không đăng nhập thật:
-
-```
-powershell -NoProfile -ExecutionPolicy Bypass -STA -File Tests\Run-CliTests.ps1 -Scratch <thư mục tạm> -VerifyGui
+cmd/claude-switch/   điểm vào, dòng lệnh, mở cửa sổ, cài shortcut
+internal/core/       Claude Desktop, Claude CLI, usage, sao lưu/khôi phục (có test)
+internal/web/        máy chủ giao diện 127.0.0.1 (có token) + HTML/CSS/JS nhúng sẵn
+internal/secure/     mã hóa account đã lưu theo từng hệ điều hành
+internal/platform/   tiến trình, terminal, Keychain, trình duyệt theo từng hệ điều hành
+tools/release/       build và đóng gói
 ```

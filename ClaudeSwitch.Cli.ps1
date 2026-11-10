@@ -109,13 +109,131 @@ function Read-CliState([string]$credentialsPath = $script:CliCredentialsPath, [s
 }
 
 function Get-CliProfileDir([string]$uuid) { return (Join-Path (Join-Path $script:CliRoot 'profiles') $uuid) }
+
+# ---- Token identity -------------------------------------------------------------
+# ~/.claude.json is shared with the Claude Code sessions embedded in Claude Desktop. They
+# rewrite "oauthAccount" to the Desktop account while .credentials.json still holds the
+# CLI login of another account. The token owner is therefore resolved from the token
+# itself (known hashes, saved profiles, then the OAuth profile endpoint), never from the
+# config claim alone. Only SHA-256 hashes of tokens are stored here.
+$script:CliIdentityPath = Join-Path $script:CliRoot 'identity.json'
+$script:CliVerifyOwner = -not $NoAppControl
+
+function Get-CliTokenKey([string]$token) {
+    if (-not $token) { return '' }
+    return (Get-Sha256Bytes $script:Utf8NoBom.GetBytes($token))
+}
+
+function Read-CliIdentityMap {
+    $data = Read-JsonFile $script:CliIdentityPath
+    $map = @{}
+    if (Test-DictHas $data 'tokens') { foreach ($k in $data['tokens'].Keys) { $map[[string]$k] = $data['tokens'][$k] } }
+    return $map
+}
+
+function Write-CliIdentityMap($map) {
+    # Keep the newest entries only; each login rotates tokens every few hours.
+    $keep = @{}
+    foreach ($entry in @($map.GetEnumerator() | Sort-Object { [long](Get-DictString $_.Value 't') } -Descending | Select-Object -First 80)) { $keep[$entry.Key] = $entry.Value }
+    Ensure-Dir $script:CliRoot
+    Write-JsonFile $script:CliIdentityPath @{ version = 1; tokens = $keep }
+}
+
+function Add-CliIdentity([string]$uuid, $oauth) {
+    if ($uuid -notmatch $script:GuidRx -or -not $oauth) { return }
+    $map = Read-CliIdentityMap
+    $now = [string][DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    foreach ($name in @('accessToken','refreshToken')) {
+        $key = Get-CliTokenKey (Get-DictString $oauth $name)
+        if ($key) { $map[$key] = @{ uuid = $uuid; t = $now } }
+    }
+    Write-CliIdentityMap $map
+}
+
+function Request-CliTokenOwner($oauth) {
+    $token = Get-DictString $oauth 'accessToken'
+    if (-not $token) { return $null }
+    if ($oauth['expiresAt'] -and [double]$oauth['expiresAt'] -le [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) { return $null }
+    $reply = Request-UsageHttp 'https://api.anthropic.com/api/oauth/profile' $token
+    if ($reply.status -ne 200 -or -not (Test-DictHas $reply.body 'account')) { return $null }
+    $owner = Get-DictString $reply.body['account'] 'uuid'
+    if ($owner -notmatch $script:GuidRx) { return $null }
+    return $owner
+}
+
+# Returns the verified owner uuid of an OAuth token set, or $null when it cannot be proven.
+function Resolve-CliTokenOwner($oauth, [string]$claimedUuid, [switch]$SkipSavedProfiles) {
+    $access = Get-DictString $oauth 'accessToken'; $refresh = Get-DictString $oauth 'refreshToken'
+    if (-not $access) { return $null }
+    $map = Read-CliIdentityMap
+    foreach ($key in @((Get-CliTokenKey $access), (Get-CliTokenKey $refresh))) {
+        if ($key -and $map.ContainsKey($key)) {
+            $known = Get-DictString $map[$key] 'uuid'
+            if ($known -match $script:GuidRx) { return $known }
+        }
+    }
+    if (-not $SkipSavedProfiles) {
+        $root = Join-Path $script:CliRoot 'profiles'
+        if (Test-Path -LiteralPath $root) {
+            foreach ($dir in Get-ChildItem -LiteralPath $root -Directory) {
+                if ($dir.Name -notmatch $script:GuidRx) { continue }
+                try { $saved = Read-CliProfile $dir.Name } catch { continue }
+                if ((Get-DictString $saved['oauth'] 'accessToken') -ceq $access -or ($refresh -and (Get-DictString $saved['oauth'] 'refreshToken') -ceq $refresh)) {
+                    # Saved copies are trusted only once their own identity was proven.
+                    $savedKey = Get-CliTokenKey (Get-DictString $saved['oauth'] 'accessToken')
+                    if (-not $script:CliVerifyOwner -or ($map.ContainsKey($savedKey) -and (Get-DictString $map[$savedKey] 'uuid') -ieq $dir.Name)) { return [string]$dir.Name }
+                }
+            }
+        }
+    }
+    if (-not $script:CliVerifyOwner) {
+        # Offline/test mode: no network check is possible, keep the previous behaviour.
+        if ($claimedUuid -match $script:GuidRx) { return $claimedUuid }
+        return $null
+    }
+    $owner = $null
+    try { $owner = Request-CliTokenOwner $oauth } catch {}
+    if ($owner) {
+        Add-CliIdentity $owner $oauth
+        if ($claimedUuid -and $owner -ine $claimedUuid) { Write-Log ('CLI: token thuộc account {0}, cấu hình ghi {1}.' -f $owner, $claimedUuid) }
+    }
+    return $owner
+}
+
+# Live CLI login with the token owner verified. Uuid is the real owner; ClaimedUuid is what
+# ~/.claude.json says. Verified=$false means the owner could not be proven yet.
+function Get-CliLiveState {
+    $state = Read-CliState
+    $state.ClaimedUuid = $state.Uuid
+    $state.Verified = $false
+    $state.Mismatch = $false
+    $hasToken = (Get-DictString $state.Oauth 'accessToken') -and (Get-DictString $state.Oauth 'refreshToken')
+    if (-not $hasToken) { return $state }
+    $owner = Resolve-CliTokenOwner $state.Oauth $state.ClaimedUuid
+    if (-not $owner) { return $state }
+    $state.Verified = $true
+    $state.Uuid = $owner
+    $state.LoggedIn = $true
+    if ($owner -ine $state.ClaimedUuid) {
+        $state.Mismatch = $true
+        $account = $null
+        try { $account = (Read-CliProfile $owner)['account'] } catch {}
+        if (-not $account) { $account = @{ accountUuid = $owner } }
+        $state.Account = $account
+    }
+    return $state
+}
+
 function Save-CliProfile($state) {
     if (-not $state.LoggedIn) { throw 'CLI chưa đăng nhập đầy đủ. Hãy bấm Đăng nhập CLI trước.' }
+    if (-not $state.Verified) { throw 'Chưa xác minh được account của đăng nhập CLI hiện tại. Chưa lưu gì.' }
+    if ((Get-DictString $state.Account 'accountUuid') -ine $state.Uuid) { throw 'Thông tin account CLI không khớp token. Chưa lưu gì.' }
     $dir = Get-CliProfileDir $state.Uuid
     $payload = @{ version=1; uuid=$state.Uuid; oauth=$state.Oauth; account=$state.Account }
     $plain = $script:Utf8NoBom.GetBytes($script:Ser.Serialize($payload))
     $encrypted = [Security.Cryptography.ProtectedData]::Protect($plain,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)
     Write-FileAtomic (Join-Path $dir 'auth.bin') $encrypted
+    Add-CliIdentity $state.Uuid $state.Oauth
     $old = Read-JsonFile (Join-Path $dir 'meta.json')
     $email = Get-DictString $state.Account 'emailAddress'
     $label = Get-DictString $old 'label'
@@ -157,21 +275,21 @@ function Get-CliPending {
 # The CLI renews and rotates its own tokens while it runs. Keep the saved copy of the
 # active account current, otherwise a later switch back restores a revoked refresh token.
 function Sync-ActiveCliProfile($current) {
-    if (-not $current.LoggedIn) { return }
+    if (-not $current.LoggedIn -or -not $current.Verified) { return }
     if (-not (Test-Path -LiteralPath (Join-Path (Get-CliProfileDir $current.Uuid) 'auth.bin'))) { return }
     $saved = $null
     try { $saved = Read-CliProfile $current.Uuid } catch {}
     if ($saved -and (Get-DictString $saved['oauth'] 'refreshToken') -ceq (Get-DictString $current.Oauth 'refreshToken') -and (Get-DictString $saved['oauth'] 'accessToken') -ceq (Get-DictString $current.Oauth 'accessToken')) { return }
     try {
         Invoke-CliLocked {
-            $again = Read-CliState
-            if ($again.LoggedIn -and $again.Uuid -ieq $current.Uuid) { Save-CliProfile $again }
+            $again = Get-CliLiveState
+            if ($again.Verified -and $again.Uuid -ieq $current.Uuid) { Save-CliProfile $again }
         }
     } catch {}
 }
 
 function Get-CliStatus {
-    $path = [string](Find-CliPath); $current = Read-CliState
+    $path = [string](Find-CliPath); $current = Get-CliLiveState
     $overrides = @(Get-CliOverrides)
     if (-not $overrides.Count) { Sync-ActiveCliProfile $current }
     $profiles = New-Object System.Collections.ArrayList
@@ -180,11 +298,12 @@ function Get-CliStatus {
         foreach ($dir in Get-ChildItem -LiteralPath $root -Directory | Sort-Object Name) {
             if ($dir.Name -notmatch $script:GuidRx) { continue }
             $meta = Read-JsonFile (Join-Path $dir.FullName 'meta.json')
-            [void]$profiles.Add(@{ uuid=[string]$dir.Name; label=(Get-DictString $meta 'label'); email=(Get-DictString $meta 'email'); hasAuth=[bool](Test-Path -LiteralPath (Join-Path $dir.FullName 'auth.bin')); isActive=($current.LoggedIn -and -not $overrides.Count -and $current.Uuid -ieq $dir.Name) })
+            [void]$profiles.Add(@{ uuid=[string]$dir.Name; label=(Get-DictString $meta 'label'); email=(Get-DictString $meta 'email'); hasAuth=[bool](Test-Path -LiteralPath (Join-Path $dir.FullName 'auth.bin')); isActive=($current.Verified -and -not $overrides.Count -and $current.Uuid -ieq $dir.Name); authRemovedReason=(Get-DictString $meta 'authRemovedReason') })
         }
     }
     $pending = Get-CliPending
-    $status = @{ installed=[bool]$path; path=$path; configDir=$CliConfigDir; loggedIn=($current.LoggedIn -and -not $overrides.Count); activeUuid=$(if($current.LoggedIn -and -not $overrides.Count){$current.Uuid}else{$null}); email=(Get-DictString $current.Account 'emailAddress'); profiles=$profiles.ToArray(); unsavedCurrent=($current.LoggedIn -and -not $overrides.Count -and -not(Test-Path -LiteralPath (Join-Path (Get-CliProfileDir $current.Uuid) 'auth.bin'))); authOverrides=$overrides; runningCount=(Get-CliRunningCount); pendingLogin=$(if($pending){@{id=$pending.id;state=$pending.state}}else{$null}) }
+    $usable = ($current.Verified -and -not $overrides.Count)
+    $status = @{ installed=[bool]$path; path=$path; configDir=$CliConfigDir; loggedIn=($current.LoggedIn -and -not $overrides.Count); activeUuid=$(if($usable){$current.Uuid}else{$null}); email=(Get-DictString $current.Account 'emailAddress'); profiles=$profiles.ToArray(); unsavedCurrent=($usable -and -not(Test-Path -LiteralPath (Join-Path (Get-CliProfileDir $current.Uuid) 'auth.bin'))); identityMismatch=($usable -and $current.Mismatch); claimedUuid=$current.ClaimedUuid; unverified=($current.LoggedIn -and -not $current.Verified -and -not $overrides.Count); authOverrides=$overrides; runningCount=(Get-CliRunningCount); pendingLogin=$(if($pending){@{id=$pending.id;state=$pending.state}}else{$null}) }
     # Remove PowerShell adapter wrappers before JavaScriptSerializer sees nested values.
     return $script:Ser.DeserializeObject(($status | ConvertTo-Json -Depth 15 -Compress))
 }
@@ -201,8 +320,10 @@ function Restore-CliFile([string]$path, $snapshot) {
 function Invoke-CliSwitch([string]$uuid, [switch]$Force) {
     Assert-CliCanChange
     $target = Read-CliProfile $uuid
-    $current = Read-CliState
-    if (-not $Force -and $current.LoggedIn -and $current.Uuid -ieq $uuid) { Write-Step 'cli' 'ok' 'CLI đang dùng account này.'; return }
+    $current = Get-CliLiveState
+    if (-not $Force -and $current.Verified -and $current.Uuid -ieq $uuid -and -not $current.Mismatch) { Write-Step 'cli' 'ok' 'CLI đang dùng account này.'; return }
+    # A login whose owner cannot be proven (offline, or expired while the CLI was closed) is never
+    # saved under a guessed account; it remains only in the encrypted backup written below.
     # Do not hand the CLI a dead login: it would show the account name but fail or fall back.
     $expiresAt = $target['oauth']['expiresAt']
     if (-not $Force -and $expiresAt -and [double]$expiresAt -le [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 60000) {
@@ -220,7 +341,7 @@ function Invoke-CliSwitch([string]$uuid, [switch]$Force) {
     # Parse and validate both files before backing up or changing either.
     $newCreds = Set-CliJsonField $credentials.Info.Text 'claudeAiOauth' $target['oauth']
     $newConfig = Set-CliJsonField $config.Info.Text 'oauthAccount' $target['account']
-    if ($current.LoggedIn -and $current.Uuid -ine $uuid) { Save-CliProfile $current }
+    if ($current.Verified -and $current.Uuid -ine $uuid) { Save-CliProfile $current }
     $backup = @{ credentials=$(if($credentials.Exists){[Convert]::ToBase64String($credentials.Bytes)}else{$null}); config=$(if($config.Exists){[Convert]::ToBase64String($config.Bytes)}else{$null}); credentialsExisted=$credentials.Exists; configExisted=$config.Exists }
     $encrypted = [Security.Cryptography.ProtectedData]::Protect($script:Utf8NoBom.GetBytes($script:Ser.Serialize($backup)),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)
     Write-FileAtomic (Join-Path (Join-Path $script:CliRoot 'backups') ((Get-Date -Format 'yyyyMMdd-HHmmss-fff')+'.bin')) $encrypted
@@ -236,6 +357,11 @@ function Invoke-CliSwitch([string]$uuid, [switch]$Force) {
         $why=$_.Exception.Message
         try { Restore-CliFile $script:CliCredentialsPath $credentials; Restore-CliFile $CliConfigFile $config } catch { throw 'Không khôi phục tự động được CLI. Bản sao lưu mã hóa nằm trong thư mục cli\backups.' }
         throw ('Chưa chuyển được CLI; đã khôi phục đăng nhập cũ. '+$why)
+    }
+    if ($current.LoggedIn -and -not $current.Verified) {
+        Write-Log 'CLI: đăng nhập trước khi chuyển chưa xác minh được chủ sở hữu, chỉ giữ trong bản sao lưu.'
+        Write-Step 'cli' 'ok' 'Đã chuyển account CLI. Đăng nhập cũ chưa xác minh được account nên không lưu đè; nếu chuyển lại bị lỗi, đăng nhập lại account đó.'
+        return
     }
     Write-Step 'cli' 'ok' 'Đã chuyển account CLI. Mở phiên Claude CLI mới để sử dụng.'
 }
@@ -273,6 +399,12 @@ function Complete-CliLogin {
     $credentialsPath=Join-Path $pending.directory '.credentials.json'
     $configPath=Join-Path $pending.directory '.claude.json'
     $state=Read-CliState $credentialsPath $configPath
+    if (-not $state.LoggedIn) { throw 'Đăng nhập CLI chưa đầy đủ. Hãy đăng nhập lại.' }
+    # The isolated login directory is written only by that login, but still prefer the token's own answer.
+    $owner = $null
+    if ($script:CliVerifyOwner) { try { $owner = Request-CliTokenOwner $state.Oauth } catch {} }
+    if ($owner -and $owner -ine $state.Uuid) { throw 'Account đăng nhập không khớp token trả về. Hãy đăng nhập lại.' }
+    $state.Verified = $true
     Save-CliProfile $state
     Invoke-CliSwitch $state.Uuid -Force
     Remove-Item -LiteralPath (Join-Path $script:CliRoot 'pending-login.json') -Force

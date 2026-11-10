@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Switch</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <img src="icon.svg" alt="" width="26" height="26">
+    <span>Claude Switch</span>
+  </div>
+  <nav class="tabs" id="tabs" role="tablist"></nav>
+  <div class="menu-wrap">
+    <button class="icon-btn" id="menuBtn" aria-haspopup="true" aria-label="Thêm tùy chọn">⋯</button>
+    <div class="menu" id="menu" hidden>
+      <label class="menu-item toggle"><input type="checkbox" id="syncChk"> <span>Hiện session ở mọi account</span></label>
+      <button class="menu-item" data-action="desktop.sync">Đồng bộ session ngay</button>
+      <button class="menu-item" data-action="desktop.removeCopies">Gỡ session đã sao chép</button>
+      <label class="menu-item toggle"><input type="checkbox" id="confirmChk"> <span>Hỏi lại trước khi chuyển</span></label>
+      <hr>
+      <button class="menu-item" data-action="open.backups">Mở thư mục sao lưu</button>
+      <button class="menu-item" data-action="open.logs">Mở nhật ký</button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <section class="info" id="info" hidden></section>
+  <section id="cards" class="cards" aria-live="polite"></section>
+  <section class="actions" id="actions"></section>
+  <footer class="usage-bar">
+    <span id="usageNote">Giới hạn đã dùng của từng account</span>
+    <button class="link-btn" id="usageBtn">Cập nhật usage</button>
+  </footer>
+</main>
+
+<section id="progress" class="progress" hidden>
+  <h2 id="progTitle"></h2>
+  <p id="progMsg" class="muted"></p>
+  <ol id="progSteps" class="steps"></ol>
+  <div class="prog-buttons" id="progButtons"></div>
+</section>
+
+<div class="overlay" id="confirm" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <h3 id="confirmTitle"></h3>
+    <p id="confirmText" class="muted"></p>
+    <label class="toggle small"><input type="checkbox" id="confirmSkip"> <span>Không hỏi lại</span></label>
+    <div class="dialog-buttons">
+      <button class="btn ghost" id="confirmNo">Để sau</button>
+      <button class="btn primary" id="confirmYes">Chuyển</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<template id="cardTpl">
+  <article class="card">
+    <div class="card-head">
+      <div class="avatar"></div>
+      <div class="who">
+        <div class="name-row"><span class="name"></span><button class="icon-btn small edit" title="Đổi tên">✎</button><span class="badge" hidden>Đang dùng</span></div>
+        <div class="email muted"></div>
+        <div class="meta muted"></div>
+      </div>
+    </div>
+    <div class="usage"></div>
+    <button class="btn primary switch" hidden></button>
+  </article>
+</template>
+<script src="app.js"></script>
+</body>
+</html>

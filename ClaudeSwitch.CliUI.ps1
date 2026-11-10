@@ -43,6 +43,12 @@ function Render-CliAccounts {
     $message='Account CLI được quản lý riêng. Hãy thoát các phiên CLI đang chạy trước khi chuyển.'
     if (-not $cli.loggedIn) { $message='Đã tìm thấy Claude CLI. Đăng nhập để lưu account đầu tiên.' }
     if ($cli.runningCount -gt 0) { $message='Có phiên Claude CLI đang chạy. Thoát CLI trước khi chuyển account; công cụ sẽ giữ nguyên phiên đang mở.' }
+    if ($cli.unverified) { $message='Chưa xác minh được account của đăng nhập CLI hiện tại (cần mạng). Công cụ tạm không lưu hay chuyển để tránh lẫn account.' }
+    if ($cli.identityMismatch) {
+        $real=@($cli.profiles | Where-Object { $_.uuid -eq $cli.activeUuid } | Select-Object -First 1)
+        $name=if($real -and $real[0].label){[string]$real[0].label}else{'account khác'}
+        $message='CLI thực tế đang đăng nhập '+$name+'. Tên account trong cấu hình CLI bị Claude Desktop ghi đè nên có thể hiển thị sai; công cụ dùng account thực.'
+    }
     if ($overridden) { $message='CLI đang dùng cấu hình đăng nhập bên ngoài: '+($cli.authOverrides -join ', ')+'. Bỏ cấu hình ghi đè để chuyển account đăng nhập tại đây.' }
     if ($cli.pendingLogin.state -eq 'waiting') { $message='Đang chờ bạn đăng nhập trong trình duyệt/cửa sổ CLI. Account hiện tại vẫn được giữ nguyên.' }
     if ($cli.pendingLogin.state -eq 'failed') { $message='Chưa hoàn tất đăng nhập CLI. Bấm bên dưới để mở lại.' }

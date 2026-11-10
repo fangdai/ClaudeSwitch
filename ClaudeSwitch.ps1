@@ -1205,12 +1205,18 @@ $pump.Start()
 
 $cliPoll = New-Object Windows.Threading.DispatcherTimer
 $cliPoll.Interval = [TimeSpan]::FromSeconds(5)
-$cliPoll.Add_Tick({ if (-not $AppState.Busy -and ($AppState.ActiveTool -eq 'cli' -or $AppState.Status.cli.pendingLogin)) { Refresh-Status } })
+# Each Status spawns an engine process: poll only while the window is on screen, or while a CLI login waits.
+$cliPoll.Add_Tick({
+    if ($AppState.Busy) { return }
+    $onScreen = ($win.IsVisible -and $win.WindowState -ne 'Minimized')
+    if (($onScreen -and $AppState.ActiveTool -eq 'cli') -or $AppState.Status.cli.pendingLogin) { Refresh-Status }
+})
 $cliPoll.Start()
 
 $usagePoll = New-Object Windows.Threading.DispatcherTimer
 $usagePoll.Interval = [TimeSpan]::FromMinutes(2)
-$usagePoll.Add_Tick({ if (-not $AppState.Busy -and -not $NoAppControl) { Start-UsageRefresh } })
+# Usage is only refreshed while visible; Show-MainWindow refreshes it when it becomes due.
+$usagePoll.Add_Tick({ if (-not $AppState.Busy -and -not $NoAppControl -and $win.IsVisible -and $win.WindowState -ne 'Minimized') { Start-UsageRefresh } })
 $usagePoll.Start()
 
 $AppState.AddTimer = New-Object Windows.Threading.DispatcherTimer

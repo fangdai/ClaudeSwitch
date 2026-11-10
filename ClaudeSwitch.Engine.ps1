@@ -854,7 +854,7 @@ try {
         }
         'CheckConfig' { Emit (Invoke-CheckConfig) }
         'RefreshUsage' { Emit (Invoke-RefreshUsage ([bool]$ForceUsage)) }
-        'CliSave' { Invoke-CliLocked { Save-CliProfile (Read-CliState) }; Emit @{ok=$true} }
+        'CliSave' { Invoke-CliLocked { Save-CliProfile (Get-CliLiveState) }; Emit @{ok=$true} }
         'CliSwitch' { Invoke-CliLocked { Invoke-CliSwitch $TargetAccount }; Emit @{ok=$true} }
         'CliLogin' { Invoke-CliLocked { Invoke-CliLogin }; Emit @{ok=$true} }
         'CliFinishLogin' { Invoke-CliLocked { Complete-CliLogin }; Emit @{ok=$true} }
