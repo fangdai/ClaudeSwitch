@@ -29,12 +29,28 @@ var ErrUnavailable = errors.New("không có WebView hệ thống")
 var (
 	raiseMu sync.Mutex
 	raiseFn func()
+	closeFn func()
 )
 
-func setRaise(f func()) {
+func setRaise(f func()) { setHooks(f, nil) }
+
+func setHooks(raise, close func()) {
 	raiseMu.Lock()
-	raiseFn = f
+	raiseFn, closeFn = raise, close
 	raiseMu.Unlock()
+}
+
+// Close closes the open window, which makes Run return. It reports false when no window
+// is open.
+func Close() bool {
+	raiseMu.Lock()
+	f := closeFn
+	raiseMu.Unlock()
+	if f == nil {
+		return false
+	}
+	f()
+	return true
 }
 
 // Raise brings the open window to the front. It reports false when no window is open.

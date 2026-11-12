@@ -36,7 +36,7 @@ func run(o Options) error {
 	w.SetSize(380, 520, webview.HintMin)
 	w.SetSize(o.Width, o.Height, webview.HintNone)
 	win := w.Window()
-	setRaise(func() { w.Dispatch(func() { C.csRaise(unsafe.Pointer(win)) }) })
+	setHooks(func() { w.Dispatch(func() { C.csRaise(unsafe.Pointer(win)) }) }, func() { w.Dispatch(w.Terminate) })
 	w.Navigate(o.URL)
 	w.Dispatch(func() { C.csRaise(unsafe.Pointer(win)) })
 	w.Run()

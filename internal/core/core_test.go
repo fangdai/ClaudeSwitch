@@ -240,6 +240,19 @@ func TestSyncSessions(t *testing.T) {
 	if removed != 1 || kept != 1 || fileExists(filepath.Join(dirB, "local_3.json")) || !fileExists(filepath.Join(dirB, "local_1.json")) {
 		t.Fatalf("remove copies: %d %d", removed, kept)
 	}
+	// Removing our own copies is not a user deletion: syncing again brings them back.
+	r, err = e.SyncSessions()
+	must(t, err)
+	if r.Copied != 1 || !fileExists(filepath.Join(dirB, "local_3.json")) {
+		t.Fatalf("resync after remove copies %+v", r)
+	}
+	// A session the user deleted stays deleted.
+	os.Remove(filepath.Join(dirB, "local_3.json"))
+	r, err = e.SyncSessions()
+	must(t, err)
+	if r.Copied != 0 || fileExists(filepath.Join(dirB, "local_3.json")) {
+		t.Fatalf("user deletion recreated %+v", r)
+	}
 }
 
 // ---- CLI ---------------------------------------------------------------------------

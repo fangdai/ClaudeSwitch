@@ -110,6 +110,20 @@ func (e *Env) readManifest() *manifest {
 	return m
 }
 
+// forget drops the "seen" marks of one session in one account, so a later sync copies it
+// again. RemoveCopies uses it: removing our own copies is not the user deleting a session.
+func (m *manifest) forget(acct, name string) {
+	if acct == "" || name == "" {
+		return
+	}
+	for k := range m.Seen {
+		parts := strings.Split(k, "|")
+		if len(parts) == 3 && parts[2] == name && (parts[0] == acct || parts[1] == acct) {
+			delete(m.Seen, k)
+		}
+	}
+}
+
 func copySession(src, dst string) error {
 	b, err := os.ReadFile(src)
 	if err != nil {
@@ -272,6 +286,7 @@ func (e *Env) RemoveCopies() (removed, kept int, err error) {
 		}
 		if fileSha(p) == str(c, "hash") {
 			if os.Remove(p) == nil {
+				man.forget(str(c, "account"), filepath.Base(p))
 				removed++
 				continue
 			}
@@ -305,4 +320,42 @@ func (e *Env) recentSessions(acct, org string) int {
 		}
 	}
 	return n
+}
+
+// SyncDesktopSessions is the "sync now" action. Claude Desktop reads the session list only
+// when it starts, and may overwrite files it has open, so a running Claude is closed first
+// and opened again afterwards; the copies then show up right away.
+func (e *Env) SyncDesktopSessions(p Progress) (string, error) {
+	running := e.DesktopRunning()
+	if running {
+		p.emit(e, "close", "running", "Đang đóng Claude…")
+		if err := e.StopDesktop(); err != nil {
+			p.emit(e, "close", "error", "Không đóng hẳn được Claude.")
+			return "", err
+		}
+		p.emit(e, "close", "done", "Đã đóng Claude.")
+	} else {
+		p.emit(e, "close", "skipped", "Claude đang tắt.")
+	}
+	p.emit(e, "sync", "running", "Đang đồng bộ session…")
+	r, err := e.SyncSessions()
+	if err != nil {
+		p.emit(e, "sync", "error", "Chưa đồng bộ được session.")
+	} else {
+		p.emit(e, "sync", "done", r.String())
+	}
+	if running {
+		p.emit(e, "open", "running", "Đang mở lại Claude…")
+		if e.StartDesktop() {
+			p.emit(e, "open", "done", "Đã mở lại Claude.")
+		} else {
+			p.emit(e, "open", "warn", "Chưa tự mở được Claude, hãy mở bằng tay.")
+		}
+	} else {
+		p.emit(e, "open", "skipped", "Mở Claude để xem session.")
+	}
+	if err != nil {
+		return "", err
+	}
+	return r.String(), nil
 }

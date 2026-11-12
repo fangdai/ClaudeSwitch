@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fangdai/ClaudeSwitch/internal/core"
@@ -220,19 +221,29 @@ func runUI(noWindow bool) error {
 	if window.Available() {
 		env.Logf("Claude Switch %s khởi động (cửa sổ WebView hệ thống).", version)
 		srv.OnRaise = window.Raise
+		srv.OnQuit = func() { window.Close() }
 		err := window.Run(window.Options{
 			URL: full, Title: "Claude Switch", Width: 500, Height: 820,
 			DataDir: filepath.Join(env.StoreDir, "webview"),
 		})
 		if err == nil {
 			cancel()
-			return <-done
+			// Closing the window always ends the app, even if a request is still running.
+			select {
+			case err := <-done:
+				return err
+			case <-time.After(3 * time.Second):
+				return nil
+			}
 		}
-		srv.OnRaise = nil
+		srv.OnRaise, srv.OnQuit = nil, nil
 		env.Logf("Không mở được cửa sổ WebView (%v), dùng trình duyệt.", err)
 	}
 
 	env.Logf("Claude Switch %s khởi động (cửa sổ trình duyệt).", version)
+	quit := make(chan struct{})
+	var quitOnce sync.Once
+	srv.OnQuit = func() { quitOnce.Do(func() { close(quit) }) }
 	proc := openBrowserWindow(full, env.StoreDir)
 	browserGone := make(chan struct{})
 	if proc != nil {
@@ -247,6 +258,9 @@ func runUI(noWindow bool) error {
 			return err
 		case <-browserGone:
 			exited, browserGone = true, nil
+		case <-quit:
+			cancel()
+			return <-done
 		case <-t.C:
 		}
 		idle := time.Since(srv.LastSeen())

@@ -62,6 +62,8 @@ type Server struct {
 
 	// OnRaise, when set, brings the existing window to the front (single instance).
 	OnRaise func() bool
+	// OnQuit, when set, closes the window and ends the app ("Thoát" in the menu).
+	OnQuit func()
 }
 
 // New prepares a server bound to a random local port.
@@ -270,8 +272,7 @@ func (s *Server) handleAction(r *http.Request) (any, error) {
 		})
 	case "desktop.sync":
 		return s.startJob("sync", func(p core.Progress) (string, error) {
-			r, err := e.SyncSessions()
-			return r.String(), err
+			return e.SyncDesktopSessions(p)
 		})
 	case "desktop.save":
 		return quick(func() (string, error) { _, err := e.SaveDesktop(); return "Đã lưu đăng nhập hiện tại.", err })
@@ -282,6 +283,11 @@ func (s *Server) handleAction(r *http.Request) (any, error) {
 			n, k, err := e.RemoveCopies()
 			return "Đã gỡ " + itoa(n) + " session đã sao chép, giữ lại " + itoa(k) + " (đã bị sửa).", err
 		})
+	case "app.quit":
+		if s.OnQuit != nil {
+			go func() { time.Sleep(300 * time.Millisecond); s.OnQuit() }()
+		}
+		return ok, nil
 	case "settings.set":
 		return ok, e.SetSetting(a.Key, a.Value)
 	case "cli.switch":

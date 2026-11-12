@@ -104,7 +104,7 @@
     switch: ["close", "backup", "sync", "switch", "open"],
     cancelAdd: ["close", "backup", "sync", "switch", "open"],
     add: ["close", "backup", "switch", "open", "login"],
-    sync: [],
+    sync: ["close", "sync", "open"],
   };
   const JOB_TITLES = {
     switch: ["Đang chuyển tài khoản", "Đã chuyển tài khoản", "Chưa chuyển được tài khoản"],
@@ -286,6 +286,8 @@
     $("confirmTitle").textContent = "Chuyển sang " + (p.label || "account này") + "?";
     $("confirmText").textContent = "Claude sẽ đóng và mở lại. Việc đang chạy trong Claude (kể cả session Claude Code) sẽ bị dừng.";
     $("confirmSkip").checked = false;
+    $("confirmSkip").parentElement.hidden = false;
+    $("confirmYes").textContent = "Chuyển";
     $("confirm").hidden = false;
     $("confirmYes").focus();
     $("confirmYes").onclick = async () => {
@@ -295,6 +297,21 @@
     };
   }
   $("confirmNo").onclick = () => ($("confirm").hidden = true);
+
+  // Claude Desktop only reads sessions when it starts, so a running Claude is restarted.
+  function confirmSync() {
+    if (!S.status || !S.status.desktop.running) return act("desktop.sync");
+    $("confirmTitle").textContent = "Đồng bộ session ngay?";
+    $("confirmText").textContent = "Claude sẽ đóng rồi mở lại để hiện session mới. Việc đang chạy trong Claude (kể cả session Claude Code) sẽ bị dừng.";
+    $("confirmSkip").parentElement.hidden = true;
+    $("confirmYes").textContent = "Đồng bộ";
+    $("confirm").hidden = false;
+    $("confirmYes").focus();
+    $("confirmYes").onclick = () => {
+      $("confirm").hidden = true;
+      act("desktop.sync");
+    };
+  }
 
   function renderCli(st) {
     const c = st.cli;
@@ -379,6 +396,13 @@
   $("menuBtn").onclick = (ev) => { ev.stopPropagation(); menu.hidden = !menu.hidden; };
   document.addEventListener("click", (ev) => { if (!menu.contains(ev.target)) menu.hidden = true; });
   for (const b of menu.querySelectorAll("[data-action]")) b.onclick = () => { menu.hidden = true; act(b.dataset.action); };
+  $("menuBtn").parentElement.querySelector('[data-action="desktop.sync"]').onclick = () => { menu.hidden = true; confirmSync(); };
+  $("quitBtn").onclick = async () => {
+    menu.hidden = true;
+    await api("/api/action", { action: "app.quit" }).catch(() => {});
+    document.body.replaceChildren(el("p", "muted", "Claude Switch đã thoát. Có thể đóng cửa sổ này."));
+    try { window.close(); } catch (e) {}
+  };
   $("syncChk").onchange = (ev) => act("settings.set", { key: "syncSessions", value: ev.target.checked });
   $("confirmChk").onchange = (ev) => act("settings.set", { key: "skipConfirm", value: !ev.target.checked });
   $("usageBtn").onclick = () => { maybeUsage(true); S.usageBusy = true; render(); };

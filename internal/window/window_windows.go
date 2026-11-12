@@ -95,14 +95,14 @@ func run(o Options) error {
 	setIcon(hwnd)
 	darkTitleBar(hwnd)
 	w.SetSize(int(380*scale), int(520*scale), webview2.HintMin)
-	setRaise(func() {
+	setHooks(func() {
 		w.Dispatch(func() {
 			if r, _, _ := procIsIconic.Call(hwnd); r != 0 {
 				procShowWindow.Call(hwnd, 9) // SW_RESTORE
 			}
 			procSetForeground.Call(hwnd)
 		})
-	})
+	}, func() { w.Dispatch(w.Terminate) })
 	w.Navigate(o.URL)
 	w.Run()
 	return nil

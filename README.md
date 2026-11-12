@@ -76,7 +76,9 @@ Lưu ý:
 - **Đừng chạy Claude Switch từ bên trong một session Claude Code của Claude Desktop**: đóng Claude sẽ tắt luôn session đó.
 - Menu **⋯** có:
   - **Hiện session ở mọi account**: sao chép nguyên văn session Claude Code sang account kia. Session bạn đã xóa sẽ không bị tạo lại.
-  - **Gỡ session đã sao chép**: chỉ gỡ những bản chưa bị sửa.
+  - **Đồng bộ session ngay**: nếu Claude đang mở, công cụ đóng Claude, đồng bộ rồi mở lại (Claude chỉ đọc danh sách session lúc khởi động).
+  - **Gỡ session đã sao chép**: chỉ gỡ những bản chưa bị sửa. Đồng bộ lại sau đó sẽ chép lại chúng.
+  - **Thoát Claude Switch**: tắt hẳn ứng dụng (đóng cửa sổ cũng thoát).
   - Mở thư mục sao lưu và mở nhật ký.
 
 ### Claude Code CLI (Windows, macOS, Linux)
